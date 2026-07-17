@@ -113,9 +113,10 @@ export default function VisitorDashboard({ visitor, inducted, onSignOut }) {
     host: "—",
   };
 
-  const now = new Date();
-  const checkInTime = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-  const checkInDate = now.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
+  // Use the real check-in/registration timestamp from the backend rather than "now".
+  const checkInMoment = new Date(v.checkedInAt || v.registeredAt || Date.now());
+  const checkInTime = checkInMoment.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+  const checkInDate = checkInMoment.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
 
   const handleSignOut = () => {
     onSignOut?.();

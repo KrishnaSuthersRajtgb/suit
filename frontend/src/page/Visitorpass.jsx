@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
+import { issuePass } from "../services/api";
 
 const ShieldIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" className="w-7 h-7" stroke="currentColor" strokeWidth={1.8}>
@@ -22,6 +23,27 @@ function DetailRow({ label, value }) {
 export default function VisitorPass({ visitor }) {
   const navigate = useNavigate();
 
+  // Pass may already be on the visitor object (issued right after the assessment).
+  // Otherwise fetch/issue it — the backend endpoint is idempotent per visit.
+  const [pass, setPass] = useState(visitor?.pass?.passId ? visitor.pass : null);
+  const [loading, setLoading] = useState(!visitor?.pass?.passId);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (pass || !visitor?._id) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    issuePass(visitor._id)
+      .then((data) => setPass(data.visitor.pass))
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [pass, visitor?._id]);
+
   const v = visitor || {
     name: "Guest Visitor",
     phone: "—",
@@ -30,25 +52,18 @@ export default function VisitorPass({ visitor }) {
     host: "—",
   };
 
-  // Generated once per visit
-  const { passId, issuedDate, issuedTime, validUntil } = useMemo(() => {
-    const now = new Date();
-    const expiry = new Date(now);
-    expiry.setHours(23, 59, 59, 999);
-
-    const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
-    const randPart = Math.random().toString(36).slice(2, 7).toUpperCase();
-
-    return {
-      passId: `EHS-${datePart}-${randPart}`,
-      issuedDate: now.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" }),
-      issuedTime: now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
-      validUntil: expiry.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
-    };
-  }, []);
+  const issuedDate = pass?.issuedAt
+    ? new Date(pass.issuedAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })
+    : "—";
+  const issuedTime = pass?.issuedAt
+    ? new Date(pass.issuedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+    : "—";
+  const validUntilTime = pass?.validUntil
+    ? new Date(pass.validUntil).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+    : "—";
 
   const qrValue = JSON.stringify({
-    passId,
+    passId: pass?.passId,
     name: v.name,
     company: v.company,
     host: v.host,
@@ -59,6 +74,29 @@ export default function VisitorPass({ visitor }) {
   });
 
   const handlePrint = () => window.print();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-10 h-10 border-2 border-slate-700 border-t-emerald-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (error || !pass) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center text-center px-6">
+        <p className="text-red-400 font-semibold mb-2">Couldn't load your visitor pass</p>
+        {error && <p className="text-slate-500 text-sm mb-6 max-w-xs">{error}</p>}
+        <button
+          onClick={() => navigate("/visitor")}
+          className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm font-semibold border border-slate-700 text-slate-200"
+        >
+          Back to Dashboard
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-white print:bg-white print:text-black">
@@ -127,12 +165,12 @@ export default function VisitorPass({ visitor }) {
             <p className="text-xs text-slate-400 -mt-1">Scan at the gate for verification</p>
 
             <div className="w-full mt-2">
-              <DetailRow label="Pass ID" value={passId} />
+              <DetailRow label="Pass ID" value={pass.passId} />
               <DetailRow label="Phone" value={v.phone} />
               <DetailRow label="Host Employee" value={v.host} />
               <DetailRow label="Purpose" value={v.purpose} />
               <DetailRow label="Issued" value={`${issuedDate}, ${issuedTime}`} />
-              <DetailRow label="Valid Until" value={`${issuedDate}, ${validUntil}`} />
+              <DetailRow label="Valid Until" value={`${issuedDate}, ${validUntilTime}`} />
             </div>
           </div>
 

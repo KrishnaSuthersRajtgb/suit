@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { submitAssessment, issuePass } from "../services/api";
 
 const QUESTIONS = [
   {
@@ -59,6 +60,7 @@ const QUESTIONS = [
   },
 ];
 
+// Display only — the backend (visitorController.js PASS_MARK) is the actual source of truth.
 const PASS_MARK = 0.8;
 const LABELS = ["A", "B", "C", "D"];
 
@@ -113,10 +115,27 @@ function OptionButton({ label, text, selected, revealed, isCorrect, onClick }) {
   );
 }
 
-// ── Result Screen — no retake, just score + one action button ─────────────────
-function ResultScreen({ score, total, onProceed }) {
-  const passed = score / total >= PASS_MARK;
-  const pct    = Math.round((score / total) * 100);
+// ── Result Screen — score + submit/issue-pass states + one action button ──────
+function ResultScreen({ score, total, passed, submitting, submitError, proceeding, onProceed }) {
+  const pct = Math.round((score / total) * 100);
+
+  if (submitting) {
+    return (
+      <div className="flex flex-col items-center text-center px-6 py-24">
+        <div className="w-10 h-10 border-2 border-slate-700 border-t-blue-500 rounded-full animate-spin mb-4" />
+        <p className="text-slate-400 text-sm">Submitting your results…</p>
+      </div>
+    );
+  }
+
+  if (submitError && passed === undefined) {
+    return (
+      <div className="flex flex-col items-center text-center px-6 py-24 max-w-md mx-auto">
+        <p className="text-red-400 font-semibold mb-2">Couldn't submit your assessment</p>
+        <p className="text-slate-500 text-sm">{submitError}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col items-center text-center px-6 py-14 max-w-lg mx-auto">
@@ -139,15 +158,20 @@ function ResultScreen({ score, total, onProceed }) {
         {passed ? "Assessment Passed!" : "Assessment Failed"}
       </h2>
 
-      <p className="text-slate-400 text-sm mb-10 leading-relaxed max-w-xs">
+      <p className="text-slate-400 text-sm mb-4 leading-relaxed max-w-xs">
         {passed
           ? "You have completed the safety assessment. You are now cleared to enter the site."
           : `You scored ${pct}%. A minimum of ${Math.round(PASS_MARK * 100)}% is required. Please contact the site safety officer.`}
       </p>
 
+      {submitError && (
+        <p className="text-red-400 text-xs mb-6 max-w-xs">{submitError}</p>
+      )}
+
       <button
         onClick={onProceed}
-        className={`flex items-center gap-2 px-8 py-3 font-bold rounded-xl text-sm transition shadow-lg
+        disabled={proceeding}
+        className={`flex items-center gap-2 px-8 py-3 font-bold rounded-xl text-sm transition shadow-lg disabled:opacity-60 disabled:cursor-not-allowed
           ${passed
             ? "bg-emerald-500 hover:bg-emerald-400 text-white shadow-emerald-900/30"
             : "bg-slate-700 hover:bg-slate-600 text-slate-300 shadow-slate-900/30"
@@ -158,7 +182,7 @@ function ResultScreen({ score, total, onProceed }) {
             <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
               <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
             </svg>
-            Enter Site
+            {proceeding ? "Issuing pass…" : "Enter Site"}
           </>
         ) : (
           <>
@@ -177,14 +201,21 @@ function ResultScreen({ score, total, onProceed }) {
 export default function SafetyAssessment({ visitor, onPass }) {
   const navigate = useNavigate();
 
-  const [current,  setCurrent]  = useState(0);
+  const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState(null);
   const [revealed, setRevealed] = useState(false);
-  const [answers,  setAnswers]  = useState([]);
+  const [answers, setAnswers] = useState([]);
   const [finished, setFinished] = useState(false);
 
-  const q     = QUESTIONS[current];
+  // Backend wiring state
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+  const [result, setResult] = useState(null); // { visitor, passed } from POST /:id/assessment
+  const [proceeding, setProceeding] = useState(false);
+
+  const q = QUESTIONS[current];
   const total = QUESTIONS.length;
+  const score = answers.filter((a) => a.correct).length;
 
   const handleSelect = (idx) => {
     if (revealed) return;
@@ -194,7 +225,7 @@ export default function SafetyAssessment({ visitor, onPass }) {
 
   const handleNext = () => {
     const isCorrect = selected === q.correct;
-    const updated   = [...answers, { correct: isCorrect }];
+    const updated = [...answers, { correct: isCorrect }];
     setAnswers(updated);
 
     if (current + 1 < total) {
@@ -206,13 +237,40 @@ export default function SafetyAssessment({ visitor, onPass }) {
     }
   };
 
-  const score  = answers.filter((a) => a.correct).length;
-  const passed = score / total >= PASS_MARK;
+  // Once the quiz is finished, submit the score and let the server decide pass/fail.
+  useEffect(() => {
+    if (!finished || result || submitting) return;
 
-  const handleProceed = () => {
-    if (passed) {
-      onPass?.();
-      navigate("/pass", { replace: true });
+    if (!visitor?._id) {
+      setSubmitError("Missing visitor record — please check in again.");
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError(null);
+
+    submitAssessment(visitor._id, score, total)
+      .then((data) => setResult(data)) // { visitor, passed }
+      .catch((err) => setSubmitError(err.message))
+      .finally(() => setSubmitting(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finished]);
+
+  const handleProceed = async () => {
+    if (!result) return;
+
+    if (result.passed) {
+      try {
+        setProceeding(true);
+        setSubmitError(null);
+        const { visitor: updatedVisitor } = await issuePass(visitor._id);
+        onPass?.(updatedVisitor);
+        navigate("/pass", { replace: true });
+      } catch (err) {
+        setSubmitError(err.message);
+      } finally {
+        setProceeding(false);
+      }
     } else {
       navigate("/visitor", { replace: true });
     }
@@ -240,6 +298,10 @@ export default function SafetyAssessment({ visitor, onPass }) {
           <ResultScreen
             score={score}
             total={total}
+            passed={result?.passed}
+            submitting={submitting}
+            submitError={submitError}
+            proceeding={proceeding}
             onProceed={handleProceed}
           />
         ) : (
