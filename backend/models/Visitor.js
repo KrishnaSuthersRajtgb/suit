@@ -44,15 +44,20 @@ const visitorSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    // Manager creates the record (status starts as APPROVED). Security then
+    // owns the CHECKED_IN / CHECKED_OUT / REJECTED transitions at the gate.
     status: {
       type: String,
-      enum: ["REGISTERED", "CHECKED_IN", "CHECKED_OUT"],
-      default: "REGISTERED",
+      enum: ["APPROVED", "CHECKED_IN", "CHECKED_OUT", "REJECTED"],
+      default: "APPROVED",
     },
     checkedInAt: {
       type: Date,
     },
     checkedOutAt: {
+      type: Date,
+    },
+    rejectedAt: {
       type: Date,
     },
     // Safety video + quiz, tracked by the Visitor Dashboard / Assessment pages.

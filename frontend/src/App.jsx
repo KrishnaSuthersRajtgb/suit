@@ -4,49 +4,64 @@ import Dashboard from "./component/Dashboard";
 import VisitorDashboard from "./page/Visitordashboard";
 import SafetyAssessment from "./page/Safetyassessment";
 import VisitorPass from "./page/Visitorpass";
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { getVisitor } from "./services/api";
 
-const VISITOR_ID_KEY = "safeguard_visitor_id";
+const VISITOR_ID_KEY = "ehs_visitor_id";
 
 function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [visitorData, setVisitorData] = useState(null);
-  const [rehydrating, setRehydrating] = useState(true);
+  const [isLoggedIn, setIsLoggedIn]       = useState(false);
+  const [visitorData, setVisitorData]     = useState(null);
+  const [inductionDone, setInductionDone] = useState(false);
+  const [rehydrating, setRehydrating]     = useState(true);
 
-  // Router state doesn't survive a page refresh, so persist the visitor's id
-  // and re-fetch the full record from the backend on load.
+  // On first load, if a visitor previously checked in, restore their
+  // session from the backend instead of dropping them back to login on
+  // every page refresh.
   useEffect(() => {
-    const savedId = localStorage.getItem(VISITOR_ID_KEY);
-    if (!savedId) {
+    const storedId = localStorage.getItem(VISITOR_ID_KEY);
+    if (!storedId) {
       setRehydrating(false);
       return;
     }
-    getVisitor(savedId)
-      .then(({ visitor }) => setVisitorData(visitor))
-      .catch(() => localStorage.removeItem(VISITOR_ID_KEY))
-      .finally(() => setRehydrating(false));
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { visitor } = await getVisitor(storedId);
+        if (cancelled) return;
+        setVisitorData(visitor);
+        setInductionDone(visitor.induction?.status === "PASSED");
+      } catch {
+        // Stale/invalid id — clear it and fall back to the login page.
+        localStorage.removeItem(VISITOR_ID_KEY);
+      } finally {
+        if (!cancelled) setRehydrating(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Called by EHSLoginPage after it hits POST /api/visitors/checkin (Visitor tab)
-  // or POST /api/visitors/register (Security tab) and gets back { visitor }.
   const handleVisitorCheckin = (visitor) => {
     setVisitorData(visitor);
-    localStorage.setItem(VISITOR_ID_KEY, visitor._id);
+    setInductionDone(visitor?.induction?.status === "PASSED");
+    if (visitor?._id) localStorage.setItem(VISITOR_ID_KEY, visitor._id);
   };
 
-  const handleSignOut = () => {
+  const handleVisitorSignOut = () => {
     setVisitorData(null);
+    setInductionDone(false);
     localStorage.removeItem(VISITOR_ID_KEY);
   };
 
-  // Source of truth is the visitor record itself, not a separate local flag.
-  const inducted = visitorData?.induction?.status === "PASSED";
-
+  // Avoid a flash of the login page while we check for a saved session.
   if (rehydrating) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="w-10 h-10 border-2 border-slate-700 border-t-emerald-500 rounded-full animate-spin" />
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-500 text-sm">
+        Loading…
       </div>
     );
   }
@@ -79,7 +94,7 @@ function App() {
         <Route
           path="/pass"
           element={
-            visitorData && inducted
+            visitorData && inductionDone
               ? <VisitorPass visitor={visitorData} />
               : <Navigate to="/" />
           }
@@ -92,8 +107,8 @@ function App() {
             visitorData
               ? <VisitorDashboard
                   visitor={visitorData}
-                  inducted={inducted}
-                  onSignOut={handleSignOut}
+                  inducted={inductionDone}
+                  onSignOut={handleVisitorSignOut}
                 />
               : <Navigate to="/" />
           }
@@ -106,7 +121,7 @@ function App() {
             visitorData
               ? <SafetyAssessment
                   visitor={visitorData}
-                  onPass={(updatedVisitor) => setVisitorData(updatedVisitor)}
+                  onPass={() => setInductionDone(true)}
                 />
               : <Navigate to="/" />
           }

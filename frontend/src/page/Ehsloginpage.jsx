@@ -1,5 +1,15 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  getPlants,
+  checkinVisitor,
+  registerVisitor,
+  loginAdmin,
+  listVisitors,
+  securityCheckIn,
+  securityCheckOut,
+  rejectVisitor,
+} from "../services/api";
 
 const ShieldIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" className="w-8 h-8" stroke="currentColor" strokeWidth={1.8}>
@@ -34,43 +44,16 @@ const BuildingIcon = () => (
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ── API helper ───────────────────────────────────────────────────────────────
-// Base URL comes from Vite env (set VITE_API_URL in .env for prod); falls
-// back to the local Express server started with `npm run dev` in /backend.
-// ─────────────────────────────────────────────────────────────────────────────
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-
-async function apiRequest(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-
-  let data = null;
-  try {
-    data = await res.json();
-  } catch {
-    // no JSON body (e.g. network-level failure) — data stays null
-  }
-
-  if (!res.ok) {
-    throw new Error(data?.message || "Something went wrong. Please try again.");
-  }
-
-  return data;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // ── Shared Plant <select> ────────────────────────────────────────────────────
 // `plants` is fetched once by the parent (GET /api/plants) and passed down,
-// so every form shares the same list instead of each firing its own request.
+// so every form/panel shares the same list instead of each firing its own request.
 // ─────────────────────────────────────────────────────────────────────────────
-function PlantSelect({ value, onChange, focusRingClass, plants, plantsLoading, plantsError }) {
+function PlantSelect({ value, onChange, focusRingClass, plants, plantsLoading, plantsError, label = "Plant", required = true }) {
   return (
     <div>
       <label className="block text-sm font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
         <BuildingIcon />
-        Plant <span className="text-red-400">*</span>
+        {label} {required && <span className="text-red-400">*</span>}
       </label>
       <select
         value={value}
@@ -94,9 +77,11 @@ function PlantSelect({ value, onChange, focusRingClass, plants, plantsLoading, p
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ── Visitor Form ────────────────────────────────────────────────────────────────
-// POST /api/visitors/checkin with just the phone number.
-// - 200  → server returns the visitor record (marks them CHECKED_IN); log in.
-// - 404  → "no record found" message, matches the old "register at Security" flow.
+// POST /api/visitors/checkin with just the phone number — this is the
+// visitor's own app login, separate from Security's physical gate actions.
+// - 200  → server returns the visitor record; log in.
+// - 404  → no approved record found for that number.
+// - 403  → the visit request was rejected.
 // ─────────────────────────────────────────────────────────────────────────────
 function VisitorForm({ onVisitorCheckin }) {
   const navigate = useNavigate();
@@ -115,10 +100,7 @@ function VisitorForm({ onVisitorCheckin }) {
 
     setLoading(true);
     try {
-      const { visitor } = await apiRequest("/visitors/checkin", {
-        method: "POST",
-        body: JSON.stringify({ phone: phone.trim() }),
-      });
+      const { visitor } = await checkinVisitor(phone.trim());
       onVisitorCheckin?.(visitor);
       navigate("/visitor");
     } catch (err) {
@@ -142,7 +124,7 @@ function VisitorForm({ onVisitorCheckin }) {
           className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
         />
         <p className="text-xs text-slate-500 mt-2">
-          Enter the phone number that Security used to register your visit.
+          Enter the phone number your visit was approved under.
         </p>
       </div>
 
@@ -175,11 +157,12 @@ function VisitorForm({ onVisitorCheckin }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ── Security Form ───────────────────────────────────────────────────────────────
-// POST /api/visitors/register — registers a visitor against a Plant so they
-// can later check in from the Visitor tab using just their phone number.
+// ── Manager Form ─────────────────────────────────────────────────────────────
+// Was previously a username/password login — now the Manager approves an
+// incoming visitor directly (POST /api/visitors/register). Security then
+// sees the approved record in their tab and checks the visitor in at the gate.
 // ─────────────────────────────────────────────────────────────────────────────
-function SecurityForm({ plants, plantsLoading, plantsError }) {
+function ManagerForm({ plants, plantsLoading, plantsError }) {
   const [name, setName]       = useState("");
   const [phone, setPhone]     = useState("");
   const [company, setCompany] = useState("");
@@ -203,19 +186,16 @@ function SecurityForm({ plants, plantsLoading, plantsError }) {
 
     setLoading(true);
     try {
-      const data = await apiRequest("/visitors/register", {
-        method: "POST",
-        body: JSON.stringify({
-          name: name.trim(),
-          phone: phone.trim(),
-          company: company.trim(),
-          purpose,
-          host: host.trim(),
-          plant,
-        }),
+      const data = await registerVisitor({
+        name: name.trim(),
+        phone: phone.trim(),
+        company: company.trim(),
+        purpose,
+        host: host.trim(),
+        plant,
       });
 
-      setSuccess(`${data.message} They can now check in from the Visitor tab using ${phone.trim()}.`);
+      setSuccess(data.message);
 
       // reset form
       setName(""); setPhone(""); setCompany(""); setPurpose(""); setHost(""); setPlant("");
@@ -238,7 +218,7 @@ function SecurityForm({ plants, plantsLoading, plantsError }) {
             placeholder="e.g. Arun Sharma"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition"
+            className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition"
           />
         </div>
         <div>
@@ -250,7 +230,7 @@ function SecurityForm({ plants, plantsLoading, plantsError }) {
             placeholder="+91 98765 43210"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition"
+            className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition"
           />
         </div>
       </div>
@@ -258,7 +238,7 @@ function SecurityForm({ plants, plantsLoading, plantsError }) {
       <PlantSelect
         value={plant}
         onChange={setPlant}
-        focusRingClass="focus:ring-amber-500"
+        focusRingClass="focus:ring-teal-500"
         plants={plants}
         plantsLoading={plantsLoading}
         plantsError={plantsError}
@@ -271,7 +251,7 @@ function SecurityForm({ plants, plantsLoading, plantsError }) {
           placeholder="e.g. ABC Contractors Ltd"
           value={company}
           onChange={(e) => setCompany(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition"
+          className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition"
         />
       </div>
 
@@ -284,7 +264,7 @@ function SecurityForm({ plants, plantsLoading, plantsError }) {
           placeholder="Who are they visiting?"
           value={host}
           onChange={(e) => setHost(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition"
+          className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition"
         />
       </div>
 
@@ -295,7 +275,7 @@ function SecurityForm({ plants, plantsLoading, plantsError }) {
         <select
           value={purpose}
           onChange={(e) => setPurpose(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition"
+          className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition"
         >
           <option value="">Select purpose…</option>
           <option value="Safety Audit">Safety Audit</option>
@@ -328,7 +308,7 @@ function SecurityForm({ plants, plantsLoading, plantsError }) {
       <button
         type="submit"
         disabled={loading}
-        className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-amber-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-3 text-sm transition flex items-center justify-center gap-2"
+        className="w-full bg-teal-500 hover:bg-teal-400 disabled:bg-teal-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-3 text-sm transition flex items-center justify-center gap-2"
       >
         {loading ? (
           <>
@@ -336,11 +316,189 @@ function SecurityForm({ plants, plantsLoading, plantsError }) {
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
             </svg>
-            Registering…
+            Approving…
           </>
-        ) : "Register Visitor"}
+        ) : "Approve Visitor"}
       </button>
     </form>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── Security Panel ───────────────────────────────────────────────────────────
+// No login — lists manager-approved visitors (optionally filtered by Plant)
+// and lets Security Check In / Check Out / Reject each one.
+// ─────────────────────────────────────────────────────────────────────────────
+const STATUS_STYLES = {
+  APPROVED:    "bg-amber-500/20 text-amber-300 border-amber-700/50",
+  CHECKED_IN:  "bg-emerald-500/20 text-emerald-300 border-emerald-700/50",
+  CHECKED_OUT: "bg-slate-700/50 text-slate-400 border-slate-600/50",
+  REJECTED:    "bg-red-500/20 text-red-300 border-red-700/50",
+};
+
+const STATUS_LABELS = {
+  APPROVED: "Awaiting Arrival",
+  CHECKED_IN: "Checked In",
+  CHECKED_OUT: "Checked Out",
+  REJECTED: "Rejected",
+};
+
+// Order + short labels for the filter tabs above the list.
+const STATUS_FILTERS = [
+  { value: "",            label: "All" },
+  { value: "APPROVED",    label: "Awaiting" },
+  { value: "CHECKED_IN",  label: "Checked In" },
+  { value: "CHECKED_OUT", label: "Checked Out" },
+  { value: "REJECTED",    label: "Rejected" },
+];
+
+const countFor = (counts, value) => {
+  if (!counts) return 0;
+  if (!value) return counts.APPROVED + counts.CHECKED_IN + counts.CHECKED_OUT + counts.REJECTED;
+  return counts[value] ?? 0;
+};
+
+function SecurityPanel({ plants, plantsLoading, plantsError }) {
+  const [plantFilter, setPlantFilter]   = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [visitors, setVisitors]         = useState([]);
+  const [counts, setCounts]             = useState(null);
+  const [loading, setLoading]           = useState(true);
+  const [error, setError]               = useState("");
+  const [actioningId, setActioningId]   = useState(null); // visitor._id currently being updated
+
+  const loadVisitors = async (plantCode, status) => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await listVisitors(plantCode || undefined, status || undefined);
+      setVisitors(data.visitors);
+      setCounts(data.counts);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadVisitors(plantFilter, statusFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plantFilter, statusFilter]);
+
+  const runAction = async (id, action) => {
+    setActioningId(id);
+    setError("");
+    try {
+      await action(id);
+      // The action may move a visitor out of the currently-filtered status
+      // (e.g. Check In while filtered to "Awaiting") — simplest correct
+      // behaviour is to just reload the list + counts.
+      await loadVisitors(plantFilter, statusFilter);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActioningId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-slate-500 -mt-1">Showing today's approvals only — a new day needs a new approval.</p>
+
+      <PlantSelect
+        value={plantFilter}
+        onChange={setPlantFilter}
+        focusRingClass="focus:ring-amber-500"
+        plants={plants}
+        plantsLoading={plantsLoading}
+        plantsError={plantsError}
+        label="Filter by Plant"
+        required={false}
+      />
+
+      {/* Status filter tabs with live counts */}
+      <div className="grid grid-cols-5 gap-1 bg-slate-800 rounded-xl p-1">
+        {STATUS_FILTERS.map((f) => (
+          <button
+            key={f.value || "all"}
+            onClick={() => setStatusFilter(f.value)}
+            className={`flex flex-col items-center justify-center gap-0.5 py-2 rounded-lg text-[11px] font-medium transition ${
+              statusFilter === f.value ? "bg-amber-500 text-white shadow" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <span className="text-sm font-bold">{countFor(counts, f.value)}</span>
+            <span>{f.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2.5 bg-red-950/60 border border-red-800 text-red-300 text-sm rounded-lg px-4 py-3">
+          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 mt-0.5 shrink-0">
+            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zm-1 9a1 1 0 01-1-1v-4a1 1 0 112 0v4a1 1 0 01-1 1z" clipRule="evenodd" />
+          </svg>
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <p className="text-slate-500 text-sm text-center py-8">Loading visitors…</p>
+      ) : visitors.length === 0 ? (
+        <p className="text-slate-500 text-sm text-center py-8">No visitors match this filter today.</p>
+      ) : (
+        <div className="space-y-3 max-h-[22rem] overflow-y-auto pr-1">
+          {visitors.map((v) => {
+            const busy = actioningId === v._id;
+            return (
+              <div key={v._id} className="bg-slate-800/60 border border-slate-700 rounded-xl p-4">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div>
+                    <p className="text-white font-semibold text-sm">{v.name}</p>
+                    <p className="text-slate-400 text-xs mt-0.5">{v.phone} · Host: {v.host}</p>
+                    {v.plant?.plantName && (
+                      <p className="text-slate-500 text-xs mt-0.5">{v.plant.plantName}</p>
+                    )}
+                  </div>
+                  <span className={`shrink-0 text-xs font-semibold px-2.5 py-1 rounded-full border ${STATUS_STYLES[v.status]}`}>
+                    {STATUS_LABELS[v.status]}
+                  </span>
+                </div>
+
+                {v.status === "APPROVED" && (
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      disabled={busy}
+                      onClick={() => runAction(v._id, securityCheckIn)}
+                      className="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-800 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg py-2 transition"
+                    >
+                      {busy ? "…" : "Check In"}
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() => runAction(v._id, rejectVisitor)}
+                      className="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-red-900 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg py-2 transition"
+                    >
+                      {busy ? "…" : "Reject"}
+                    </button>
+                  </div>
+                )}
+
+                {v.status === "CHECKED_IN" && (
+                  <button
+                    disabled={busy}
+                    onClick={() => runAction(v._id, securityCheckOut)}
+                    className="w-full mt-3 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg py-2 transition"
+                  >
+                    {busy ? "…" : "Check Out"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -366,10 +524,7 @@ function AdminForm({ onLoginSuccess, plants, plantsLoading, plantsError }) {
 
     setLoading(true);
     try {
-      const data = await apiRequest("/auth/admin/login", {
-        method: "POST",
-        body: JSON.stringify({ username: username.trim(), password, plant }),
-      });
+      const data = await loginAdmin({ username: username.trim(), password, plant });
 
       localStorage.setItem("ehs_token", data.token);
       onLoginSuccess?.(data.user);
@@ -446,114 +601,12 @@ function AdminForm({ onLoginSuccess, plants, plantsLoading, plantsError }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ── Manager Form ─────────────────────────────────────────────────────────────
-// POST /api/auth/manager/login — stores the JWT and calls onLoginSuccess.
-// ─────────────────────────────────────────────────────────────────────────────
-function ManagerForm({ onLoginSuccess, plants, plantsLoading, plantsError }) {
-  const navigate = useNavigate();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [plant, setPlant]       = useState("");
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState("");
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError("");
-
-    if (!username.trim()) { setError("Username is required."); return; }
-    if (!password.trim()) { setError("Password is required."); return; }
-    if (!plant)            { setError("Plant is required."); return; }
-
-    setLoading(true);
-    try {
-      const data = await apiRequest("/auth/manager/login", {
-        method: "POST",
-        body: JSON.stringify({ username: username.trim(), password, plant }),
-      });
-
-      localStorage.setItem("ehs_token", data.token);
-      onLoginSuccess?.(data.user);
-      navigate("/manager");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-1.5">
-          Username <span className="text-red-400">*</span>
-        </label>
-        <input
-          type="text"
-          placeholder="manager.username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition"
-        />
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-1.5">
-          Password <span className="text-red-400">*</span>
-        </label>
-        <input
-          type="password"
-          placeholder="••••••••"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition"
-        />
-      </div>
-
-      <PlantSelect
-        value={plant}
-        onChange={setPlant}
-        focusRingClass="focus:ring-teal-500"
-        plants={plants}
-        plantsLoading={plantsLoading}
-        plantsError={plantsError}
-      />
-
-      {error && (
-        <div className="flex items-start gap-2.5 bg-red-950/60 border border-red-800 text-red-300 text-sm rounded-lg px-4 py-3">
-          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 mt-0.5 shrink-0">
-            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zm-1 9a1 1 0 01-1-1v-4a1 1 0 112 0v4a1 1 0 01-1 1z" clipRule="evenodd" />
-          </svg>
-          {error}
-        </div>
-      )}
-
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full bg-teal-500 hover:bg-teal-400 disabled:bg-teal-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-3 text-sm transition flex items-center justify-center gap-2"
-      >
-        {loading ? (
-          <>
-            <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
-            </svg>
-            Signing in…
-          </>
-        ) : "Sign In as Manager"}
-      </button>
-    </form>
-  );
-}
-
 // ── Main Login Page ────────────────────────────────────────────────────────────
 export default function EHSLoginPage({ onLoginSuccess, onVisitorCheckin }) {
   // Employee tab removed from UI — defaulting to "visitor".
   const [tab, setTab] = useState("visitor");
 
-  // Plants are fetched once here and shared by Security / Admin / Manager forms.
+  // Plants are fetched once here and shared by Security / Manager / Admin.
   const [plants, setPlants]               = useState([]);
   const [plantsLoading, setPlantsLoading] = useState(true);
   const [plantsError, setPlantsError]     = useState("");
@@ -563,7 +616,7 @@ export default function EHSLoginPage({ onLoginSuccess, onVisitorCheckin }) {
 
     (async () => {
       try {
-        const data = await apiRequest("/plants");
+        const data = await getPlants();
         if (!cancelled) setPlants(data);
       } catch (err) {
         if (!cancelled) setPlantsError(err.message);
@@ -664,8 +717,8 @@ export default function EHSLoginPage({ onLoginSuccess, onVisitorCheckin }) {
 
           {tab === "security" && (
             <>
-              <p className="text-slate-400 text-sm mb-5">Register an incoming visitor's details before they arrive.</p>
-              <SecurityForm plants={plants} plantsLoading={plantsLoading} plantsError={plantsError} />
+              <p className="text-slate-400 text-sm mb-5">Check in, check out, or reject manager-approved visitors.</p>
+              <SecurityPanel plants={plants} plantsLoading={plantsLoading} plantsError={plantsError} />
             </>
           )}
 
@@ -683,13 +736,8 @@ export default function EHSLoginPage({ onLoginSuccess, onVisitorCheckin }) {
 
           {tab === "manager" && (
             <>
-              <p className="text-slate-400 text-sm mb-5">Sign in with your manager credentials.</p>
-              <ManagerForm
-                onLoginSuccess={onLoginSuccess}
-                plants={plants}
-                plantsLoading={plantsLoading}
-                plantsError={plantsError}
-              />
+              <p className="text-slate-400 text-sm mb-5">Approve an incoming visitor's details before they arrive.</p>
+              <ManagerForm plants={plants} plantsLoading={plantsLoading} plantsError={plantsError} />
             </>
           )}
 

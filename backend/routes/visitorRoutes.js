@@ -5,15 +5,22 @@ const {
   getVisitorById,
   submitAssessment,
   issuePass,
+  listVisitors,
+  securityCheckIn,
+  securityCheckOut,
+  rejectVisitor,
 } = require("../controllers/visitorController");
 
 const router = express.Router();
 
-router.post("/register", registerVisitor);        // Security tab
-router.post("/checkin", checkinVisitor);           // Visitor tab
-
-router.get("/:id", getVisitorById);                 // rehydrate VisitorDashboard on refresh
-router.post("/:id/assessment", submitAssessment);   // SafetyAssessment quiz result
-router.post("/:id/pass", issuePass);                // issue (or re-fetch) the Visitor Pass
+router.get("/", listVisitors); // Security tab — list of visitors, ?plant=CODE to filter
+router.post("/register", registerVisitor); // Manager tab — approve/register a visitor
+router.post("/checkin", checkinVisitor); // Visitor tab — app login by phone
+router.get("/:id", getVisitorById); // rehydrate VisitorDashboard on refresh
+router.post("/:id/checkin", securityCheckIn); // Security — physical check-in
+router.post("/:id/checkout", securityCheckOut); // Security — physical check-out
+router.post("/:id/reject", rejectVisitor); // Security — reject
+router.post("/:id/assessment", submitAssessment); // SafetyAssessment result
+router.post("/:id/pass", issuePass); // VisitorPass page
 
 module.exports = router;
