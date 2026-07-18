@@ -73,5 +73,6 @@ const loginWithRole = (allowedRole) =>
 
 const loginAdmin = loginWithRole("ADMIN");
 const loginManager = loginWithRole("MANAGER");
+const loginSecurity = loginWithRole("SECURITY");   // add this line
 
-module.exports = { loginAdmin, loginManager };
+module.exports = { loginAdmin, loginManager, loginSecurity };

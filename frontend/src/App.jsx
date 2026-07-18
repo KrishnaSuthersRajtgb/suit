@@ -4,16 +4,36 @@ import Dashboard from "./component/Dashboard";
 import VisitorDashboard from "./page/Visitordashboard";
 import SafetyAssessment from "./page/Safetyassessment";
 import VisitorPass from "./page/Visitorpass";
+import AdminDashboard from "./page/Admindashboard";
+import ManagerDashboard from "./page/Managerdashboard";
 import { useEffect, useState } from "react";
 import { getVisitor } from "./services/api";
 
 const VISITOR_ID_KEY = "ehs_visitor_id";
+
+// Reads the role off whatever staff user (Admin or Manager) is currently
+// stored, so a page refresh doesn't lose the session.
+const getStoredRole = () => {
+  try {
+    return JSON.parse(localStorage.getItem("ehs_user") || "null")?.role || null;
+  } catch {
+    return null;
+  }
+};
 
 function App() {
   const [isLoggedIn, setIsLoggedIn]       = useState(false);
   const [visitorData, setVisitorData]     = useState(null);
   const [inductionDone, setInductionDone] = useState(false);
   const [rehydrating, setRehydrating]     = useState(true);
+
+  // Single source of truth for "who's logged in on this device right now":
+  // "ADMIN", "MANAGER", or null. Admin and Manager share one token slot
+  // (kiosk-style — one staff session at a time), so the role decides which
+  // of /admin or /manager is unlocked.
+  const [staffRole, setStaffRole] = useState(
+    () => (localStorage.getItem("ehs_token") ? getStoredRole() : null)
+  );
 
   // On first load, if a visitor previously checked in, restore their
   // session from the backend instead of dropping them back to login on
@@ -57,6 +77,18 @@ function App() {
     localStorage.removeItem(VISITOR_ID_KEY);
   };
 
+  // Shared by both AdminForm and ManagerLoginForm in Ehsloginpage.jsx — the
+  // token is already stashed in localStorage by the form itself, we just
+  // need the user's role to know which dashboard route to unlock.
+  const handleStaffLoginSuccess = (user) => {
+    if (user) localStorage.setItem("ehs_user", JSON.stringify(user));
+    setStaffRole(user?.role || null);
+  };
+
+  const handleStaffLogout = () => {
+    setStaffRole(null);
+  };
+
   // Avoid a flash of the login page while we check for a saved session.
   if (rehydrating) {
     return (
@@ -75,6 +107,7 @@ function App() {
           element={
             <EHSLoginPage
               onLoginSuccess={() => setIsLoggedIn(true)}
+              onStaffLoginSuccess={handleStaffLoginSuccess}
               onVisitorCheckin={handleVisitorCheckin}
             />
           }
@@ -86,6 +119,26 @@ function App() {
           element={
             isLoggedIn
               ? <Dashboard onLogout={() => setIsLoggedIn(false)} />
+              : <Navigate to="/" />
+          }
+        />
+
+        {/* Admin Dashboard — full visibility across visitor/security/manager data */}
+        <Route
+          path="/admin"
+          element={
+            staffRole === "ADMIN"
+              ? <AdminDashboard onLogout={handleStaffLogout} />
+              : <Navigate to="/" />
+          }
+        />
+
+        {/* Manager Dashboard — approve incoming visitors */}
+        <Route
+          path="/manager"
+          element={
+            staffRole === "MANAGER"
+              ? <ManagerDashboard onLogout={handleStaffLogout} />
               : <Navigate to="/" />
           }
         />

@@ -1,0 +1,286 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  getPlants,
+  listVisitors,
+  securityCheckIn,
+  securityCheckOut,
+  rejectVisitor,
+  logoutAdmin,
+} from "../services/api";
+
+const ShieldIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" className="w-7 h-7" stroke="currentColor" strokeWidth={1.8}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 2L4 6v6c0 5.25 3.5 9.74 8 11 4.5-1.26 8-5.75 8-11V6l-8-4z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4" />
+  </svg>
+);
+
+const LogoutIcon = () => (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+    <path fillRule="evenodd" d="M3 4.25A2.25 2.25 0 015.25 2h5.5A2.25 2.25 0 0113 4.25v2a.75.75 0 01-1.5 0v-2a.75.75 0 00-.75-.75h-5.5a.75.75 0 00-.75.75v11.5c0 .414.336.75.75.75h5.5a.75.75 0 00.75-.75v-2a.75.75 0 011.5 0v2A2.25 2.25 0 0110.75 18h-5.5A2.25 2.25 0 013 15.75V4.25z" clipRule="evenodd" />
+    <path fillRule="evenodd" d="M6 10a.75.75 0 01.75-.75h9.19l-2.22-2.22a.75.75 0 111.06-1.06l3.5 3.5a.75.75 0 010 1.06l-3.5 3.5a.75.75 0 11-1.06-1.06l2.22-2.22H6.75A.75.75 0 016 10z" clipRule="evenodd" />
+  </svg>
+);
+
+const BuildingIcon = () => (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+    <path fillRule="evenodd" d="M4 2a1 1 0 00-1 1v15a1 1 0 001 1h4v-3a1 1 0 011-1h2a1 1 0 011 1v3h4a1 1 0 001-1V3a1 1 0 00-1-1H4zm2 3a1 1 0 011-1h1a1 1 0 010 2H7a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2h-1zM6 9a1 1 0 011-1h1a1 1 0 010 2H7a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2h-1zM6 13a1 1 0 011-1h1a1 1 0 110 2H7a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2h-1z" clipRule="evenodd" />
+  </svg>
+);
+
+const STATUS_STYLES = {
+  APPROVED:    "bg-amber-500/20 text-amber-300 border-amber-700/50",
+  CHECKED_IN:  "bg-emerald-500/20 text-emerald-300 border-emerald-700/50",
+  CHECKED_OUT: "bg-slate-700/50 text-slate-400 border-slate-600/50",
+  REJECTED:    "bg-red-500/20 text-red-300 border-red-700/50",
+};
+
+const STATUS_LABELS = {
+  APPROVED: "Awaiting Arrival",
+  CHECKED_IN: "Checked In",
+  CHECKED_OUT: "Checked Out",
+  REJECTED: "Rejected",
+};
+
+const STATUS_FILTERS = [
+  { value: "",            label: "All" },
+  { value: "APPROVED",    label: "Awaiting" },
+  { value: "CHECKED_IN",  label: "Checked In" },
+  { value: "CHECKED_OUT", label: "Checked Out" },
+  { value: "REJECTED",    label: "Rejected" },
+];
+
+const countFor = (counts, value) => {
+  if (!counts) return 0;
+  if (!value) return counts.APPROVED + counts.CHECKED_IN + counts.CHECKED_OUT + counts.REJECTED;
+  return counts[value] ?? 0;
+};
+
+export default function SecurityDashboard({ onLogout }) {
+  const navigate = useNavigate();
+
+  const [guard] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("ehs_user") || "null");
+    } catch {
+      return null;
+    }
+  });
+
+  const [plants, setPlants]             = useState([]);
+  const [plantsLoading, setPlantsLoading] = useState(true);
+  const [plantsError, setPlantsError]   = useState("");
+
+  const [plantFilter, setPlantFilter]   = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [visitors, setVisitors]         = useState([]);
+  const [counts, setCounts]             = useState(null);
+  const [loading, setLoading]           = useState(true);
+  const [error, setError]               = useState("");
+  const [actioningId, setActioningId]   = useState(null);
+
+  // Guard the route — no token means no business being here.
+  useEffect(() => {
+    if (!localStorage.getItem("ehs_token")) {
+      navigate("/", { replace: true });
+    }
+  }, [navigate]);
+
+  useEffect(() => {
+    getPlants()
+      .then(setPlants)
+      .catch((err) => setPlantsError(err.message))
+      .finally(() => setPlantsLoading(false));
+  }, []);
+
+  const loadVisitors = async (plantCode, status) => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await listVisitors(plantCode || undefined, status || undefined);
+      setVisitors(data.visitors);
+      setCounts(data.counts);
+    } catch (err) {
+      if (err.status === 401 || err.status === 403) {
+        logoutAdmin();
+        navigate("/", { replace: true });
+        return;
+      }
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadVisitors(plantFilter, statusFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plantFilter, statusFilter]);
+
+  const runAction = async (id, action) => {
+    setActioningId(id);
+    setError("");
+    try {
+      await action(id);
+      // The action may move a visitor out of the currently-filtered status
+      // (e.g. Check In while filtered to "Awaiting") — simplest correct
+      // behaviour is to just reload the list + counts.
+      await loadVisitors(plantFilter, statusFilter);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActioningId(null);
+    }
+  };
+
+  const handleLogout = () => {
+    logoutAdmin();
+    onLogout?.();
+    navigate("/", { replace: true });
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950">
+      <header className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur border-b border-slate-800">
+        <div className="max-w-2xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="text-amber-400"><ShieldIcon /></div>
+            <span className="text-lg font-semibold text-white">
+              SafeGuard <span className="text-amber-400">EHS</span>
+            </span>
+            <span className="hidden sm:inline text-slate-600 mx-2">/</span>
+            <span className="hidden sm:inline text-slate-400 text-sm">Security</span>
+          </div>
+          <div className="flex items-center gap-4">
+            {guard?.username && (
+              <span className="hidden sm:block text-sm text-slate-400">
+                Signed in as <span className="text-white font-medium">{guard.username}</span>
+              </span>
+            )}
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 text-sm text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg px-3.5 py-2 transition"
+            >
+              <LogoutIcon />
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-6 py-10 space-y-4">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Gate Check-In</h2>
+          <p className="text-slate-400 text-sm mt-1">Check in, check out, or reject manager-approved visitors.</p>
+        </div>
+
+        <p className="text-xs text-slate-500 -mt-1">Showing today's approvals only — a new day needs a new approval.</p>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
+            <BuildingIcon />
+            Filter by Plant
+          </label>
+          <select
+            value={plantFilter}
+            onChange={(e) => setPlantFilter(e.target.value)}
+            disabled={plantsLoading || !!plantsError}
+            className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <option value="">
+              {plantsLoading ? "Loading plants…" : plantsError ? "Could not load plants" : "All plants"}
+            </option>
+            {plants.map((p) => (
+              <option key={p._id} value={p.plantCode}>
+                {p.plantName} — {p.location}
+              </option>
+            ))}
+          </select>
+          {plantsError && <p className="text-xs text-red-400 mt-1.5">{plantsError}</p>}
+        </div>
+
+        <div className="grid grid-cols-5 gap-1 bg-slate-800 rounded-xl p-1">
+          {STATUS_FILTERS.map((f) => (
+            <button
+              key={f.value || "all"}
+              onClick={() => setStatusFilter(f.value)}
+              className={`flex flex-col items-center justify-center gap-0.5 py-2 rounded-lg text-[11px] font-medium transition ${
+                statusFilter === f.value ? "bg-amber-500 text-white shadow" : "text-slate-400 hover:text-white"
+              }`}
+            >
+              <span className="text-sm font-bold">{countFor(counts, f.value)}</span>
+              <span>{f.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2.5 bg-red-950/60 border border-red-800 text-red-300 text-sm rounded-lg px-4 py-3">
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 mt-0.5 shrink-0">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zm-1 9a1 1 0 01-1-1v-4a1 1 0 112 0v4a1 1 0 01-1 1z" clipRule="evenodd" />
+            </svg>
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <p className="text-slate-500 text-sm text-center py-8">Loading visitors…</p>
+        ) : visitors.length === 0 ? (
+          <p className="text-slate-500 text-sm text-center py-8">No visitors match this filter today.</p>
+        ) : (
+          <div className="space-y-3">
+            {visitors.map((v) => {
+              const busy = actioningId === v._id;
+              return (
+                <div key={v._id} className="bg-slate-800/60 border border-slate-700 rounded-xl p-4">
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <div>
+                      <p className="text-white font-semibold text-sm">{v.name}</p>
+                      <p className="text-slate-400 text-xs mt-0.5">{v.phone} · Host: {v.host}</p>
+                      {v.plant?.plantName && (
+                        <p className="text-slate-500 text-xs mt-0.5">{v.plant.plantName}</p>
+                      )}
+                    </div>
+                    <span className={`shrink-0 text-xs font-semibold px-2.5 py-1 rounded-full border ${STATUS_STYLES[v.status]}`}>
+                      {STATUS_LABELS[v.status]}
+                    </span>
+                  </div>
+
+                  {v.status === "APPROVED" && (
+                    <div className="flex gap-2 mt-3">
+                      <button
+                        disabled={busy}
+                        onClick={() => runAction(v._id, securityCheckIn)}
+                        className="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-800 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg py-2 transition"
+                      >
+                        {busy ? "…" : "Check In"}
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() => runAction(v._id, rejectVisitor)}
+                        className="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-red-900 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg py-2 transition"
+                      >
+                        {busy ? "…" : "Reject"}
+                      </button>
+                    </div>
+                  )}
+
+                  {v.status === "CHECKED_IN" && (
+                    <button
+                      disabled={busy}
+                      onClick={() => runAction(v._id, securityCheckOut)}
+                      className="w-full mt-3 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg py-2 transition"
+                    >
+                      {busy ? "…" : "Check Out"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}

@@ -29,9 +29,10 @@ const run = async () => {
   const chennai1 = plantDocs.find((p) => p.plantCode === "PLT-CHN01");
 
   const testUsers = [
-    { username: "admin1", password: "Admin@123", role: "ADMIN", fullName: "Test Admin" },
-    { username: "manager1", password: "Manager@123", role: "MANAGER", fullName: "Test Manager" },
-  ];
+  { username: "admin1", password: "Admin@12", role: "ADMIN", fullName: "Test Admin" },
+  { username: "manager1", password: "Manager@123", role: "MANAGER", fullName: "Test Manager" },
+  { username: "security1", password: "Security@123", role: "SECURITY", fullName: "Test Security Guard" },
+];
 
   for (const u of testUsers) {
     const existing = await User.findOne({ username: u.username });
