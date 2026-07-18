@@ -6,6 +6,7 @@ import SafetyAssessment from "./page/Safetyassessment";
 import VisitorPass from "./page/Visitorpass";
 import AdminDashboard from "./page/Admindashboard";
 import ManagerDashboard from "./page/Managerdashboard";
+import SecurityDashboard from "./page/Securitydashboard"; // adjust path/filename to match your actual file
 import { useEffect, useState } from "react";
 import { getVisitor } from "./services/api";
 
@@ -179,6 +180,15 @@ function App() {
               : <Navigate to="/" />
           }
         />
+        {/* Security Dashboard — gate check-in/out */}
+<Route
+  path="/security"
+  element={
+    staffRole === "SECURITY"
+      ? <SecurityDashboard onLogout={handleStaffLogout} />
+      : <Navigate to="/" />
+  }
+/>
 
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
