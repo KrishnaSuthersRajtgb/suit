@@ -1,5 +1,32 @@
 const mongoose = require("mongoose");
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Full visitor journey, in order. `status` is now the SINGLE source of truth —
+// it replaces the old split between `status` (gate) and `induction.status`.
+//
+//   DRAFT → INVITED → INDUCTION_STARTED → VIDEO_COMPLETED → ASSESSMENT_PASSED
+//         → PASS_GENERATED → CHECKED_IN → CHECKED_OUT → CLOSED
+//
+// Exception / terminal states, reachable from various points in the pipeline
+// above (see TRANSITIONS in visitorController.js for exactly which):
+//   FAILED_ASSESSMENT, EXPIRED, REJECTED, CANCELLED
+// ─────────────────────────────────────────────────────────────────────────────
+const VISITOR_STATUSES = [
+  "DRAFT",
+  "INVITED",
+  "INDUCTION_STARTED",
+  "VIDEO_COMPLETED",
+  "ASSESSMENT_PASSED",
+  "PASS_GENERATED",
+  "CHECKED_IN",
+  "CHECKED_OUT",
+  "CLOSED",
+  "FAILED_ASSESSMENT",
+  "EXPIRED",
+  "REJECTED",
+  "CANCELLED",
+];
+
 const visitorSchema = new mongoose.Schema(
   {
     name: {
@@ -44,35 +71,52 @@ const visitorSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
-    // Manager creates the record (status starts as APPROVED). Security then
-    // owns the CHECKED_IN / CHECKED_OUT / REJECTED transitions at the gate.
+
+    // Single status drives the whole journey. Manager's registerVisitor
+    // creates records already at INVITED — Security does NOT see these until
+    // the visitor has completed induction and a pass has been generated.
     status: {
       type: String,
-      enum: ["APPROVED", "CHECKED_IN", "CHECKED_OUT", "REJECTED"],
-      default: "APPROVED",
+      enum: VISITOR_STATUSES,
+      default: "INVITED",
     },
-    checkedInAt: {
-      type: Date,
-    },
-    checkedOutAt: {
-      type: Date,
-    },
-    rejectedAt: {
-      type: Date,
-    },
-    // Safety video + quiz, tracked by the Visitor Dashboard / Assessment pages.
-    induction: {
-      status: {
-        type: String,
-        enum: ["PENDING", "PASSED", "FAILED"],
-        default: "PENDING",
+
+    // Append-only audit trail — every transition pushes an entry here.
+    statusHistory: [
+      {
+        status: { type: String, enum: VISITOR_STATUSES },
+        at: { type: Date, default: Date.now },
+        note: { type: String },
       },
+    ],
+
+    // Per-stage timestamps — handy for dashboards/reporting without having
+    // to scan statusHistory every time.
+    invitedAt: { type: Date },
+    inductionStartedAt: { type: Date },
+    videoCompletedAt: { type: Date },
+    assessmentPassedAt: { type: Date },
+    passGeneratedAt: { type: Date },
+    checkedInAt: { type: Date },
+    checkedOutAt: { type: Date },
+    closedAt: { type: Date },
+
+    failedAssessmentAt: { type: Date },
+    expiredAt: { type: Date },
+    rejectedAt: { type: Date },
+    rejectionReason: { type: String, trim: true },
+    cancelledAt: { type: Date },
+
+    // Safety video + quiz detail — score history kept even though the
+    // pass/fail *flow* now lives entirely on `status`.
+    induction: {
       assessmentScore: { type: Number },
       assessmentTotal: { type: Number },
       attemptedAt: { type: Date },
-      completedAt: { type: Date }, // set only when status flips to PASSED
+      attempts: { type: Number, default: 0 },
     },
-    // Issued once, after induction passes — the Visitor Pass page reads this.
+
+    // Issued once, when status flips to PASS_GENERATED.
     pass: {
       passId: { type: String },
       issuedAt: { type: Date },
@@ -81,5 +125,7 @@ const visitorSchema = new mongoose.Schema(
   },
   { timestamps: { createdAt: "registeredAt", updatedAt: "updatedAt" } }
 );
+
+visitorSchema.statics.STATUSES = VISITOR_STATUSES;
 
 module.exports = mongoose.model("Visitor", visitorSchema);

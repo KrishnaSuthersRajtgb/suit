@@ -6,8 +6,17 @@ import {
   registerVisitor,
   securityCheckIn,
   securityCheckOut,
+  closeVisitor,
   rejectVisitor,
   logoutAdmin,
+  getAllQuestions,
+  createQuestion,
+  updateQuestion,
+  deleteQuestion,
+  getAllVideos,
+  createVideo,
+  listStaff,
+  createStaff,
 } from "../services/api";
 
 const ShieldIcon = () => (
@@ -43,31 +52,82 @@ const PlusIcon = () => (
   </svg>
 );
 
+const BookIcon = () => (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+    <path d="M9.25 3.5A2.25 2.25 0 007 1.25H4.25A2.25 2.25 0 002 3.5v11a1.5 1.5 0 001.5 1.5H7a2 2 0 012 2V3.5z" />
+    <path d="M10.75 3.5A2.25 2.25 0 0113 1.25h2.75A2.25 2.25 0 0118 3.5v11a1.5 1.5 0 01-1.5 1.5H13a2 2 0 00-2 2V3.5z" />
+  </svg>
+);
+
+const VideoIcon = () => (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+    <path d="M2 5.5A1.5 1.5 0 013.5 4h7A1.5 1.5 0 0112 5.5v9a1.5 1.5 0 01-1.5 1.5h-7A1.5 1.5 0 012 14.5v-9z" />
+    <path d="M13.5 8.379l3.116-2.08A.75.75 0 0118 6.92v6.161a.75.75 0 01-1.384.42L13.5 11.62V8.38z" />
+  </svg>
+);
+
+const ChevronDownIcon = ({ open }) => (
+  <svg
+    viewBox="0 0 20 20" fill="currentColor" className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`}
+  >
+    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+  </svg>
+);
+
+const UsersIcon = () => (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+    <path d="M7 8a3 3 0 100-6 3 3 0 000 6z" />
+    <path d="M14 9a2.5 2.5 0 100-5 2.5 2.5 0 000 5z" />
+    <path fillRule="evenodd" d="M1.5 16.5c0-3.038 2.462-5.5 5.5-5.5s5.5 2.462 5.5 5.5a.75.75 0 01-.75.75h-9.5a.75.75 0 01-.75-.75z" clipRule="evenodd" />
+    <path d="M13.5 11.75c2.108.377 3.75 2.164 3.75 4.4a.75.75 0 01-.75.75h-2a.75.75 0 01-.75-.75c0-1.53-.55-2.93-1.464-4.02.406-.24.847-.354 1.214-.38z" />
+  </svg>
+);
+
+// ── Real backend statuses (see visitorController.js TRANSITIONS) ───────────
+// The Admin gate view only ever receives GATE_RELEVANT_STATUSES from the API
+// by default: PASS_GENERATED, CHECKED_IN, CHECKED_OUT, CLOSED, REJECTED,
+// EXPIRED, CANCELLED. "Awaiting" here means "pass issued, not yet at the
+// gate" — i.e. PASS_GENERATED — not a status called "APPROVED" (that status
+// doesn't exist in the backend and previously caused Check-In to never show).
 const STATUS_STYLES = {
-  APPROVED:    "bg-amber-500/20 text-amber-300 border-amber-700/50",
-  CHECKED_IN:  "bg-emerald-500/20 text-emerald-300 border-emerald-700/50",
-  CHECKED_OUT: "bg-slate-700/50 text-slate-400 border-slate-600/50",
-  REJECTED:    "bg-red-500/20 text-red-300 border-red-700/50",
+  PASS_GENERATED: "bg-amber-500/20 text-amber-300 border-amber-700/50",
+  CHECKED_IN:      "bg-emerald-500/20 text-emerald-300 border-emerald-700/50",
+  CHECKED_OUT:     "bg-slate-700/50 text-slate-400 border-slate-600/50",
+  CLOSED:          "bg-slate-800/70 text-slate-500 border-slate-700/50",
+  REJECTED:        "bg-red-500/20 text-red-300 border-red-700/50",
+  EXPIRED:         "bg-orange-500/20 text-orange-300 border-orange-700/50",
+  CANCELLED:       "bg-slate-800/70 text-slate-500 border-slate-700/50",
 };
 
 const STATUS_LABELS = {
-  APPROVED: "Awaiting Arrival",
-  CHECKED_IN: "Checked In",
-  CHECKED_OUT: "Checked Out",
-  REJECTED: "Rejected",
+  PASS_GENERATED: "Awaiting Arrival",
+  CHECKED_IN:      "Checked In",
+  CHECKED_OUT:     "Checked Out",
+  CLOSED:          "Closed",
+  REJECTED:        "Rejected",
+  EXPIRED:         "Expired",
+  CANCELLED:       "Cancelled",
 };
 
 const STATUS_FILTERS = [
-  { value: "",            label: "All" },
-  { value: "APPROVED",    label: "Awaiting" },
-  { value: "CHECKED_IN",  label: "Checked In" },
-  { value: "CHECKED_OUT", label: "Checked Out" },
-  { value: "REJECTED",    label: "Rejected" },
+  { value: "",                label: "All" },
+  { value: "PASS_GENERATED",  label: "Awaiting" },
+  { value: "CHECKED_IN",      label: "Checked In" },
+  { value: "CHECKED_OUT",     label: "Checked Out" },
+  { value: "CLOSED",          label: "Closed" },
+  { value: "REJECTED",        label: "Rejected" },
+  { value: "EXPIRED",         label: "Expired" },
 ];
+
+// Stat cards shown at the top — keep this list in sync with STATUS_FILTERS
+// (minus "All") if you add/remove a status card.
+const STAT_CARD_STATUSES = ["PASS_GENERATED", "CHECKED_IN", "CHECKED_OUT", "REJECTED"];
 
 const countFor = (counts, value) => {
   if (!counts) return 0;
-  if (!value) return counts.APPROVED + counts.CHECKED_IN + counts.CHECKED_OUT + counts.REJECTED;
+  if (!value) {
+    return Object.values(counts).reduce((sum, n) => sum + (n || 0), 0);
+  }
   return counts[value] ?? 0;
 };
 
@@ -78,11 +138,13 @@ const fmtTime = (iso) => {
   return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 };
 
-// ── Resilient field lookup ───────────────────────────────────────────────────
-// We don't know your exact Visitor schema field names, so this tries several
-// common variants (flat and nested) instead of assuming one. Once you confirm
-// the real field name, delete the ones that don't apply and keep just yours —
-// e.g. if your schema uses `visitor.gate.checkInTime`, just use that directly.
+// ── Field lookup ─────────────────────────────────────────────────────────────
+// visitorController.js writes these exact timestamp fields via `transition()`:
+//   invitedAt, inductionStartedAt, videoCompletedAt, assessmentPassedAt,
+//   failedAssessmentAt, passGeneratedAt, checkedInAt, checkedOutAt,
+//   closedAt, rejectedAt, cancelledAt.
+// Kept a couple of common alternate spellings as a fallback in case the
+// schema field names differ slightly on your end.
 const pickTime = (obj, paths) => {
   for (const path of paths) {
     const val = path.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), obj);
@@ -91,22 +153,32 @@ const pickTime = (obj, paths) => {
   return null;
 };
 
-const getCheckInTime = (v) =>
-  pickTime(v, [
-    "checkInTime", "checkinTime", "checkInAt", "checkinAt", "checkIn",
-    "actualCheckIn", "gate.checkInTime", "log.checkInTime",
-  ]);
-
-const getCheckOutTime = (v) =>
-  pickTime(v, [
-    "checkOutTime", "checkoutTime", "checkOutAt", "checkoutAt", "checkOut",
-    "actualCheckOut", "gate.checkOutTime", "log.checkOutTime",
-  ]);
+const getRequestedTime = (v) => pickTime(v, ["invitedAt", "createdAt", "registeredAt"]);
+const getCheckInTime   = (v) => pickTime(v, ["checkedInAt", "checkInAt", "checkinAt", "checkIn"]);
+const getCheckOutTime  = (v) => pickTime(v, ["checkedOutAt", "checkOutAt", "checkoutAt", "checkOut"]);
 
 // Turns a row into a safe CSV cell (quotes anything with a comma/quote/newline).
 const csvCell = (val) => {
   const s = String(val ?? "");
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+// Shared small message boxes used by the new panels below.
+const ErrorBox = ({ children }) => (
+  <div className="bg-red-950/60 border border-red-800 text-red-300 text-sm rounded-lg px-4 py-3">{children}</div>
+);
+const SuccessBox = ({ children }) => (
+  <div className="bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-sm rounded-lg px-4 py-3">{children}</div>
+);
+
+const inputCls =
+  "w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition";
+const labelCls = "block text-sm font-medium text-slate-300 mb-1.5";
+
+const plantNameFor = (plants, plantRefOrId) => {
+  if (!plantRefOrId) return "All Plants";
+  const id = typeof plantRefOrId === "object" ? plantRefOrId._id : plantRefOrId;
+  return plants.find((p) => p._id === id)?.plantName || (typeof plantRefOrId === "object" ? plantRefOrId.plantName : "—") || "—";
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141,7 +213,7 @@ function ApproveVisitorForm({ plants, plantsLoading, plantsError, onApproved }) 
         name: name.trim(), phone: phone.trim(), company: company.trim(),
         purpose, host: host.trim(), plant,
       });
-      setSuccess(data.message || "Visitor approved.");
+      setSuccess(data.message || "Visitor invited.");
       setName(""); setPhone(""); setCompany(""); setPurpose(""); setHost(""); setPlant("");
       onApproved?.();
     } catch (err) {
@@ -155,71 +227,74 @@ function ApproveVisitorForm({ plants, plantsLoading, plantsError, onApproved }) 
     <form onSubmit={handleSubmit} className="space-y-4 bg-slate-900 border border-slate-800 rounded-xl p-5">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">
+          <label className={labelCls}>
             Full Name <span className="text-red-400">*</span>
           </label>
           <input
             type="text" placeholder="e.g. Arun Sharma" value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
+            className={inputCls}
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">
+          <label className={labelCls}>
             Phone <span className="text-red-400">*</span>
           </label>
           <input
             type="tel" placeholder="+91 98765 43210" value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
+            className={inputCls}
           />
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">
+          <label className={labelCls}>
             Plant <span className="text-red-400">*</span>
           </label>
           <select
             value={plant} onChange={(e) => setPlant(e.target.value)}
             disabled={plantsLoading || !!plantsError}
-            className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition disabled:opacity-60"
+            className={`${inputCls} disabled:opacity-60`}
           >
             <option value="">{plantsLoading ? "Loading…" : "Select plant…"}</option>
             {plants.map((p) => (
-              <option key={p._id} value={p.plantCode}>{p.plantName}</option>
+              // Send the real Mongo _id — this is what the Visitor schema's
+              // `plant` ref field expects. Sending plantCode here caused a
+              // "Cast to ObjectId failed" 500 error.
+              <option key={p._id} value={p._id}>{p.plantName}</option>
             ))}
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Company / Organisation</label>
+          <label className={labelCls}>Company / Organisation</label>
           <input
             type="text" placeholder="e.g. ABC Contractors Ltd" value={company}
             onChange={(e) => setCompany(e.target.value)}
-            className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
+            className={inputCls}
           />
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">
+          <label className={labelCls}>
             Host Employee Name <span className="text-red-400">*</span>
           </label>
           <input
             type="text" placeholder="Who are they visiting?" value={host}
             onChange={(e) => setHost(e.target.value)}
-            className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
+            className={inputCls}
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">
+          <label className={labelCls}>
             Purpose of Visit <span className="text-red-400">*</span>
           </label>
           <select
             value={purpose} onChange={(e) => setPurpose(e.target.value)}
-            className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
+            className={inputCls}
           >
             <option value="">Select purpose…</option>
             <option value="Safety Audit">Safety Audit</option>
@@ -232,16 +307,647 @@ function ApproveVisitorForm({ plants, plantsLoading, plantsError, onApproved }) 
         </div>
       </div>
 
-      {error && <div className="bg-red-950/60 border border-red-800 text-red-300 text-sm rounded-lg px-4 py-3">{error}</div>}
-      {success && <div className="bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-sm rounded-lg px-4 py-3">{success}</div>}
+      {error && <ErrorBox>{error}</ErrorBox>}
+      {success && <SuccessBox>{success}</SuccessBox>}
 
       <button
         type="submit" disabled={loading}
         className="w-full sm:w-auto bg-purple-500 hover:bg-purple-400 disabled:bg-purple-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg px-6 py-2.5 text-sm transition"
       >
-        {loading ? "Approving…" : "Approve Visitor"}
+        {loading ? "Inviting…" : "Invite Visitor"}
       </button>
     </form>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── Manage Assessment (Questions + Video) ────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+function QuestionForm({ plants, existing, onSaved, onCancel }) {
+  const isEdit = !!existing;
+  const [text, setText]       = useState(existing?.question || "");
+  const [options, setOptions] = useState(
+    existing?.options?.length === 4 ? existing.options : ["", "", "", ""]
+  );
+  const [correct, setCorrect] = useState(existing?.correct ?? 0);
+  const [plant, setPlant]     = useState(existing?.plant?._id || existing?.plant || "");
+  const [order, setOrder]     = useState(existing?.order ?? 0);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError]     = useState("");
+
+  const handleOptionChange = (idx, val) => {
+    setOptions((prev) => prev.map((o, i) => (i === idx ? val : o)));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+
+    if (!text.trim()) { setError("Question text is required."); return; }
+    if (options.some((o) => !o.trim())) { setError("All 4 options are required."); return; }
+
+    setSubmitting(true);
+    try {
+      const payload = {
+        question: text.trim(),
+        options: options.map((o) => o.trim()),
+        correct,
+        plant: plant || null,
+        order: Number(order) || 0,
+      };
+      if (isEdit) {
+        await updateQuestion(existing._id, payload);
+      } else {
+        await createQuestion(payload);
+        setText(""); setOptions(["", "", "", ""]); setCorrect(0); setPlant(""); setOrder(0);
+      }
+      onSaved?.();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4 bg-slate-950 border border-slate-800 rounded-xl p-4">
+      <div>
+        <label className={labelCls}>
+          Question <span className="text-red-400">*</span>
+        </label>
+        <input
+          type="text" value={text} onChange={(e) => setText(e.target.value)}
+          placeholder="e.g. What should you do before entering a restricted area?"
+          className={inputCls}
+        />
+      </div>
+
+      <div className="space-y-2.5">
+        <label className={labelCls}>
+          Options — select the correct one <span className="text-red-400">*</span>
+        </label>
+        {options.map((opt, idx) => (
+          <div key={idx} className="flex items-center gap-3">
+            <input
+              type="radio" name={`correct-${existing?._id || "new"}`} checked={correct === idx}
+              onChange={() => setCorrect(idx)}
+              className="w-4 h-4 accent-emerald-500 shrink-0"
+            />
+            <span className="text-xs font-semibold text-slate-500 w-4 shrink-0">
+              {String.fromCharCode(65 + idx)}
+            </span>
+            <input
+              type="text" value={opt} onChange={(e) => handleOptionChange(idx, e.target.value)}
+              placeholder={`Option ${String.fromCharCode(65 + idx)}`}
+              className={inputCls}
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className={labelCls}>Scope (Plant)</label>
+          <select value={plant} onChange={(e) => setPlant(e.target.value)} className={inputCls}>
+            <option value="">All Plants</option>
+            {plants.map((p) => (
+              <option key={p._id} value={p._id}>{p.plantName}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={labelCls}>Display Order</label>
+          <input
+            type="number" value={order} onChange={(e) => setOrder(e.target.value)}
+            className={inputCls}
+          />
+        </div>
+      </div>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      <div className="flex gap-2">
+        <button
+          type="submit" disabled={submitting}
+          className="bg-purple-500 hover:bg-purple-400 disabled:bg-purple-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg px-5 py-2.5 text-sm transition"
+        >
+          {submitting ? "Saving…" : isEdit ? "Save Changes" : "Add Question"}
+        </button>
+        {isEdit && (
+          <button
+            type="button" onClick={onCancel}
+            className="bg-slate-800 hover:bg-slate-700 text-white font-semibold rounded-lg px-5 py-2.5 text-sm transition"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+
+function QuestionRow({ q, plants, onEdit, onDeleted }) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleDelete = async () => {
+    if (!window.confirm("Delete this question? This can't be undone.")) return;
+    setDeleting(true);
+    setError("");
+    try {
+      await deleteQuestion(q._id);
+      onDeleted?.();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <p className="text-white font-medium text-sm">{q.question}</p>
+          <p className="text-xs text-slate-500 mt-1">
+            Scope: {plantNameFor(plants, q.plant)} · Order: {q.order} · {q.status}
+          </p>
+          <ul className="mt-2.5 space-y-1">
+            {q.options.map((opt, i) => (
+              <li
+                key={i}
+                className={`text-xs px-2.5 py-1 rounded-md ${
+                  i === q.correct ? "bg-emerald-500/20 text-emerald-300" : "text-slate-400"
+                }`}
+              >
+                {String.fromCharCode(65 + i)}. {opt}
+              </li>
+            ))}
+          </ul>
+          {error && <p className="text-red-400 text-xs mt-2">{error}</p>}
+        </div>
+        <div className="flex flex-col gap-1.5 shrink-0">
+          <button
+            onClick={onEdit}
+            className="text-xs bg-slate-800 hover:bg-slate-700 text-white rounded-lg px-3 py-1.5 transition"
+          >
+            Edit
+          </button>
+          <button
+            onClick={handleDelete} disabled={deleting}
+            className="text-xs bg-red-600 hover:bg-red-500 disabled:bg-red-900 disabled:cursor-not-allowed text-white rounded-lg px-3 py-1.5 transition"
+          >
+            {deleting ? "…" : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QuestionsTab({ plants }) {
+  const [questions, setQuestions] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState("");
+  const [editingId, setEditingId] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await getAllQuestions();
+      setQuestions(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <QuestionForm plants={plants} onSaved={load} />
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {loading ? (
+        <p className="text-slate-500 text-sm text-center py-6">Loading questions…</p>
+      ) : questions.length === 0 ? (
+        <p className="text-slate-500 text-sm text-center py-6">
+          No questions yet — add the first one above.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {questions.map((q) =>
+            editingId === q._id ? (
+              <QuestionForm
+                key={q._id}
+                plants={plants}
+                existing={q}
+                onSaved={() => { setEditingId(null); load(); }}
+                onCancel={() => setEditingId(null)}
+              />
+            ) : (
+              <QuestionRow
+                key={q._id}
+                q={q}
+                plants={plants}
+                onEdit={() => setEditingId(q._id)}
+                onDeleted={load}
+              />
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VideoTab({ plants }) {
+  const [videos, setVideos]   = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState("");
+
+  const [title, setTitle]     = useState("");
+  const [url, setUrl]         = useState("");
+  const [plant, setPlant]     = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError]   = useState("");
+  const [success, setSuccess]       = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    setListError("");
+    try {
+      const data = await getAllVideos();
+      setVideos(data);
+    } catch (err) {
+      setListError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setFormError("");
+    setSuccess("");
+
+    if (!url.trim()) { setFormError("Video URL is required."); return; }
+
+    setSubmitting(true);
+    try {
+      await createVideo({ title: title.trim(), url: url.trim(), plant: plant || null });
+      setSuccess("Saved — this is now the active induction video for that scope.");
+      setTitle(""); setUrl(""); setPlant("");
+      load();
+    } catch (err) {
+      setFormError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4 bg-slate-950 border border-slate-800 rounded-xl p-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className={labelCls}>Video Title</label>
+            <input
+              type="text" value={title} onChange={(e) => setTitle(e.target.value)}
+              placeholder="Site Safety Induction"
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className={labelCls}>Scope (Plant)</label>
+            <select value={plant} onChange={(e) => setPlant(e.target.value)} className={inputCls}>
+              <option value="">All Plants</option>
+              {plants.map((p) => (
+                <option key={p._id} value={p._id}>{p.plantName}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label className={labelCls}>
+            Video URL <span className="text-red-400">*</span>
+          </label>
+          <input
+            type="text" value={url} onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://... .mp4, or a YouTube link"
+            className={inputCls}
+          />
+        </div>
+
+        {formError && <ErrorBox>{formError}</ErrorBox>}
+        {success && <SuccessBox>{success}</SuccessBox>}
+
+        <button
+          type="submit" disabled={submitting}
+          className="bg-purple-500 hover:bg-purple-400 disabled:bg-purple-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg px-5 py-2.5 text-sm transition"
+        >
+          {submitting ? "Saving…" : "Set Active Video"}
+        </button>
+      </form>
+
+      {listError && <ErrorBox>{listError}</ErrorBox>}
+
+      {loading ? (
+        <p className="text-slate-500 text-sm text-center py-6">Loading videos…</p>
+      ) : videos.length === 0 ? (
+        <p className="text-slate-500 text-sm text-center py-6">No video set yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {videos.map((v) => (
+            <div
+              key={v._id}
+              className={`flex items-center justify-between gap-3 bg-slate-900 border rounded-xl px-4 py-3 ${
+                v.isActive ? "border-emerald-700/50" : "border-slate-800"
+              }`}
+            >
+              <div className="min-w-0">
+                <p className="text-white text-sm font-medium truncate">{v.title}</p>
+                <p className="text-xs text-slate-500 break-all">{v.url}</p>
+                <p className="text-xs text-slate-500 mt-0.5">Scope: {plantNameFor(plants, v.plant)}</p>
+              </div>
+              {v.isActive && (
+                <span className="shrink-0 text-xs font-semibold text-emerald-300 bg-emerald-500/20 border border-emerald-700/50 px-2.5 py-1 rounded-full">
+                  Active
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── Create Staff (Security / Manager) ────────────────────────────────────────
+// fixedRole: when provided ("SECURITY" | "MANAGER"), the role dropdown is
+// hidden and the form/list is locked to that role — used so "Add Security"
+// and "Add Manager" can be separate buttons/panels instead of one combined
+// panel with a role switcher.
+// ─────────────────────────────────────────────────────────────────────────────
+function CreateStaffPanel({ plants, plantsLoading, plantsError, fixedRole }) {
+  const [staff, setStaff]       = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [listError, setListError] = useState("");
+
+  const [username, setUsername]     = useState("");
+  const [password, setPassword]     = useState("");
+  const [role, setRole]             = useState(fixedRole || "SECURITY");
+  const [fullName, setFullName]     = useState("");
+  const [email, setEmail]           = useState("");
+  const [phone, setPhone]           = useState("");
+  const [plant, setPlant]           = useState("");
+  const [employeeId, setEmployeeId] = useState("");
+  const [department, setDepartment] = useState("");
+  const [designation, setDesignation] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError]           = useState("");
+  const [success, setSuccess]       = useState("");
+
+  const loadStaff = async () => {
+    setLoading(true);
+    setListError("");
+    try {
+      const data = await listStaff();
+      setStaff(data);
+    } catch (err) {
+      setListError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadStaff();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    setSuccess("");
+
+    if (!username.trim()) { setError("Username is required."); return; }
+    if (!password || password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    if (!plant) { setError("Plant is required."); return; }
+
+    setSubmitting(true);
+    try {
+      await createStaff({
+        username: username.trim(),
+        password,
+        role,
+        fullName: fullName.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        plant,
+        employeeId: employeeId.trim(),
+        department: department.trim(),
+        designation: designation.trim(),
+      });
+      setSuccess(`${role === "MANAGER" ? "Manager" : "Security"} account created.`);
+      setUsername(""); setPassword(""); setFullName(""); setEmail(""); setPhone("");
+      setEmployeeId(""); setDepartment(""); setDesignation(""); setPlant("");
+      loadStaff();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // When this panel is locked to one role (fixedRole set), only show that
+  // role's accounts in the table below — keeps "Add Security" and
+  // "Add Manager" as clean, separate views.
+  const displayedStaff = fixedRole ? staff.filter((s) => s.role === fixedRole) : staff;
+
+  return (
+    <div className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4 bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className={labelCls}>
+              Role <span className="text-red-400">*</span>
+            </label>
+            {fixedRole ? (
+              <div className={`${inputCls} flex items-center bg-slate-800/60 text-slate-300`}>
+                {fixedRole === "MANAGER" ? "Manager" : "Security"}
+              </div>
+            ) : (
+              <select value={role} onChange={(e) => setRole(e.target.value)} className={inputCls}>
+                <option value="SECURITY">Security</option>
+                <option value="MANAGER">Manager</option>
+              </select>
+            )}
+          </div>
+          <div>
+            <label className={labelCls}>
+              Plant <span className="text-red-400">*</span>
+            </label>
+            <select
+              value={plant} onChange={(e) => setPlant(e.target.value)}
+              disabled={plantsLoading || !!plantsError}
+              className={`${inputCls} disabled:opacity-60`}
+            >
+              <option value="">{plantsLoading ? "Loading…" : "Select plant…"}</option>
+              {plants.map((p) => (
+                <option key={p._id} value={p._id}>{p.plantName}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className={labelCls}>
+              Username <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="text" value={username} onChange={(e) => setUsername(e.target.value)}
+              placeholder="e.g. jsmith"
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className={labelCls}>
+              Password <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+              placeholder="Min 6 characters"
+              className={inputCls}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className={labelCls}>Full Name</label>
+            <input
+              type="text" value={fullName} onChange={(e) => setFullName(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className={labelCls}>Employee ID</label>
+            <input
+              type="text" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className={labelCls}>Email</label>
+            <input
+              type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className={labelCls}>Phone</label>
+            <input
+              type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className={labelCls}>Department</label>
+            <input
+              type="text" value={department} onChange={(e) => setDepartment(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className={labelCls}>Designation</label>
+            <input
+              type="text" value={designation} onChange={(e) => setDesignation(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+        </div>
+
+        {error && <ErrorBox>{error}</ErrorBox>}
+        {success && <SuccessBox>{success}</SuccessBox>}
+
+        <button
+          type="submit" disabled={submitting}
+          className="w-full sm:w-auto bg-purple-500 hover:bg-purple-400 disabled:bg-purple-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg px-6 py-2.5 text-sm transition"
+        >
+          {submitting ? "Creating…" : `Create ${role === "MANAGER" ? "Manager" : "Security"} Account`}
+        </button>
+      </form>
+
+      {listError && <ErrorBox>{listError}</ErrorBox>}
+
+      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        {loading ? (
+          <p className="text-slate-500 text-sm text-center py-8">Loading staff accounts…</p>
+        ) : displayedStaff.length === 0 ? (
+          <p className="text-slate-500 text-sm text-center py-8">
+            {fixedRole === "MANAGER" ? "No Manager accounts yet." : fixedRole === "SECURITY" ? "No Security accounts yet." : "No Security/Manager accounts yet."}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-800 text-slate-500 text-xs uppercase tracking-wide">
+                  <th className="text-left font-medium px-5 py-3">Username</th>
+                  <th className="text-left font-medium px-5 py-3">Role</th>
+                  <th className="text-left font-medium px-5 py-3">Plant</th>
+                  <th className="text-left font-medium px-5 py-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/70">
+                {displayedStaff.map((s) => (
+                  <tr key={s._id} className="hover:bg-slate-800/40 transition">
+                    <td className="px-5 py-3.5">
+                      <p className="text-white font-medium">{s.username}</p>
+                      {s.fullName && <p className="text-slate-500 text-xs mt-0.5">{s.fullName}</p>}
+                    </td>
+                    <td className="px-5 py-3.5 text-slate-300">{s.role}</td>
+                    <td className="px-5 py-3.5 text-slate-300">{s.plant?.plantName || "—"}</td>
+                    <td className="px-5 py-3.5">
+                      <span
+                        className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
+                          s.status === "ACTIVE"
+                            ? "bg-emerald-500/20 text-emerald-300 border-emerald-700/50"
+                            : "bg-slate-800 text-slate-500 border-slate-700/50"
+                        }`}
+                      >
+                        {s.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -262,7 +968,24 @@ export default function AdminDashboard({ onLogout }) {
   const [plantFilter, setPlantFilter]   = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch]             = useState("");
-  const [showApproveForm, setShowApproveForm] = useState(false);
+  // Single "Actions" button drives a dropdown menu; only one panel — the
+  // one the user picked — is ever open at a time.
+  // activePanel: null | "visitor" | "question" | "video" | "security" | "manager"
+  const [activePanel, setActivePanel] = useState(null);
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+
+  const ACTION_ITEMS = [
+    { key: "visitor",  label: "Invite Visitor", Icon: PlusIcon },
+    { key: "question", label: "Add Question",   Icon: BookIcon },
+    { key: "video",    label: "Add Video",      Icon: VideoIcon },
+    { key: "security", label: "Add Security",   Icon: UsersIcon },
+    { key: "manager",  label: "Add Manager",    Icon: UsersIcon },
+  ];
+
+  const selectActionPanel = (key) => {
+    setActivePanel((prev) => (prev === key ? null : key));
+    setActionsMenuOpen(false);
+  };
 
   const [visitors, setVisitors]         = useState([]);
   const [counts, setCounts]             = useState(null);
@@ -283,11 +1006,14 @@ export default function AdminDashboard({ onLogout }) {
       .catch((err) => setPlantsError(err.message));
   }, []);
 
-  const loadVisitors = async (plantCode, status) => {
+  const loadVisitors = async (plantId, status) => {
     setLoading(true);
     setError("");
     try {
-      const data = await listVisitors(plantCode || undefined, status || undefined);
+      // Admin needs full history, not just today's active-status records —
+      // pass includeAll=true so the backend skips its today-only scoping
+      // (that scoping still applies for Security's gate queue, unaffected).
+      const data = await listVisitors(plantId || undefined, status || undefined, false, true);
       setVisitors(data.visitors);
       setCounts(data.counts);
     } catch (err) {
@@ -341,7 +1067,7 @@ export default function AdminDashboard({ onLogout }) {
     const rows = filteredVisitors.map((v) => [
       v.name, v.phone, v.company, v.host, v.plant?.plantName, v.purpose,
       STATUS_LABELS[v.status] || v.status,
-      fmtTime(v.createdAt), fmtTime(getCheckInTime(v)), fmtTime(getCheckOutTime(v)),
+      fmtTime(getRequestedTime(v)), fmtTime(getCheckInTime(v)), fmtTime(getCheckOutTime(v)),
     ]);
     const csv = [headers, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -386,16 +1112,16 @@ export default function AdminDashboard({ onLogout }) {
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
         {/* Stat cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {STATUS_FILTERS.filter((f) => f.value).map((f) => (
+          {STAT_CARD_STATUSES.map((status) => (
             <button
-              key={f.value}
-              onClick={() => setStatusFilter(statusFilter === f.value ? "" : f.value)}
+              key={status}
+              onClick={() => setStatusFilter(statusFilter === status ? "" : status)}
               className={`text-left bg-slate-900 border rounded-xl p-4 transition ${
-                statusFilter === f.value ? "border-purple-500 ring-1 ring-purple-500" : "border-slate-800 hover:border-slate-700"
+                statusFilter === status ? "border-purple-500 ring-1 ring-purple-500" : "border-slate-800 hover:border-slate-700"
               }`}
             >
-              <p className="text-2xl font-bold text-white">{countFor(counts, f.value)}</p>
-              <p className="text-xs text-slate-400 mt-1">{f.label}</p>
+              <p className="text-2xl font-bold text-white">{countFor(counts, status)}</p>
+              <p className="text-xs text-slate-400 mt-1">{STATUS_LABELS[status]}</p>
             </button>
           ))}
         </div>
@@ -422,12 +1148,15 @@ export default function AdminDashboard({ onLogout }) {
           >
             <option value="">All plants</option>
             {plants.map((p) => (
-              <option key={p._id} value={p.plantCode}>{p.plantName}</option>
+              // Filtering hits `query.plant = plant` server-side, which is
+              // matched directly against the ObjectId field — plantCode
+              // would silently match nothing, so use _id here too.
+              <option key={p._id} value={p._id}>{p.plantName}</option>
             ))}
           </select>
           {plantsError && <p className="text-xs text-red-400">{plantsError}</p>}
 
-          <div className="flex gap-1 bg-slate-800 rounded-lg p-1">
+          <div className="flex gap-1 bg-slate-800 rounded-lg p-1 flex-wrap">
             {STATUS_FILTERS.map((f) => (
               <button
                 key={f.value || "all"}
@@ -441,13 +1170,36 @@ export default function AdminDashboard({ onLogout }) {
             ))}
           </div>
 
-          <button
-            onClick={() => setShowApproveForm((s) => !s)}
-            className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-sm font-semibold rounded-lg px-4 py-2.5 transition"
-          >
-            <PlusIcon />
-            {showApproveForm ? "Close" : "Approve Visitor"}
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setActionsMenuOpen((s) => !s)}
+              className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-sm font-semibold rounded-lg px-4 py-2.5 transition"
+            >
+              <PlusIcon />
+              Actions
+              <ChevronDownIcon open={actionsMenuOpen} />
+            </button>
+
+            {actionsMenuOpen && (
+              <div className="absolute right-0 lg:left-0 mt-2 w-52 bg-slate-900 border border-slate-700 rounded-lg shadow-xl overflow-hidden z-20">
+                {ACTION_ITEMS.map(({ key, label, Icon }) => (
+                  <button
+                    key={key}
+                    onClick={() => selectActionPanel(key)}
+                    className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-left transition ${
+                      activePanel === key
+                        ? "bg-purple-500/20 text-purple-300"
+                        : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                    }`}
+                  >
+                    <Icon />
+                    {label}
+                    {activePanel === key && <span className="ml-auto text-xs text-purple-300">Open</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           <button
             onClick={handleExportCsv}
@@ -459,13 +1211,51 @@ export default function AdminDashboard({ onLogout }) {
           </button>
         </div>
 
-        {/* Approve Visitor — same capability Manager has, available right here */}
-        {showApproveForm && (
+        {/* Only the single panel picked from the Actions dropdown renders. */}
+
+        {/* Invite Visitor — same capability Manager has, available right here */}
+        {activePanel === "visitor" && (
           <ApproveVisitorForm
             plants={plants}
             plantsLoading={plants.length === 0 && !plantsError}
             plantsError={plantsError}
             onApproved={() => loadVisitors(plantFilter, statusFilter)}
+          />
+        )}
+
+        {/* Add Question — quiz questions only */}
+        {activePanel === "question" && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+            <h3 className="text-white font-semibold text-sm">Quiz Questions</h3>
+            <QuestionsTab plants={plants} />
+          </div>
+        )}
+
+        {/* Add Video — induction video only */}
+        {activePanel === "video" && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+            <h3 className="text-white font-semibold text-sm">Induction Video</h3>
+            <VideoTab plants={plants} />
+          </div>
+        )}
+
+        {/* Add Security — create Security accounts */}
+        {activePanel === "security" && (
+          <CreateStaffPanel
+            plants={plants}
+            plantsLoading={plants.length === 0 && !plantsError}
+            plantsError={plantsError}
+            fixedRole="SECURITY"
+          />
+        )}
+
+        {/* Add Manager — create Manager accounts */}
+        {activePanel === "manager" && (
+          <CreateStaffPanel
+            plants={plants}
+            plantsLoading={plants.length === 0 && !plantsError}
+            plantsError={plantsError}
+            fixedRole="MANAGER"
           />
         )}
 
@@ -490,6 +1280,7 @@ export default function AdminDashboard({ onLogout }) {
                     <th className="text-left font-medium px-5 py-3">Company / Host</th>
                     <th className="text-left font-medium px-5 py-3">Plant</th>
                     <th className="text-left font-medium px-5 py-3">Purpose</th>
+                    <th className="text-left font-medium px-5 py-3">Requested</th>
                     <th className="text-left font-medium px-5 py-3">Status</th>
                     <th className="text-left font-medium px-5 py-3">Checked In</th>
                     <th className="text-left font-medium px-5 py-3">Checked Out</th>
@@ -511,15 +1302,17 @@ export default function AdminDashboard({ onLogout }) {
                         </td>
                         <td className="px-5 py-3.5 text-slate-300">{v.plant?.plantName || "—"}</td>
                         <td className="px-5 py-3.5 text-slate-300">{v.purpose || "—"}</td>
+                        <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getRequestedTime(v))}</td>
                         <td className="px-5 py-3.5">
-                          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${STATUS_STYLES[v.status]}`}>
+                          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${STATUS_STYLES[v.status] || "bg-slate-800 text-slate-400 border-slate-700"}`}>
                             {STATUS_LABELS[v.status] || v.status}
                           </span>
                         </td>
                         <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getCheckInTime(v))}</td>
                         <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getCheckOutTime(v))}</td>
                         <td className="px-5 py-3.5 whitespace-nowrap">
-                          {v.status === "APPROVED" && (
+                          {/* Pass has been issued — visitor can now be checked in at the gate, or rejected */}
+                          {v.status === "PASS_GENERATED" && (
                             <div className="flex gap-1.5">
                               <button
                                 disabled={busy}
@@ -546,7 +1339,16 @@ export default function AdminDashboard({ onLogout }) {
                               {busy ? "…" : "Check Out"}
                             </button>
                           )}
-                          {(v.status === "CHECKED_OUT" || v.status === "REJECTED") && (
+                          {v.status === "CHECKED_OUT" && (
+                            <button
+                              disabled={busy}
+                              onClick={() => runAction(v._id, closeVisitor)}
+                              className="bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg px-2.5 py-1.5 transition"
+                            >
+                              {busy ? "…" : "Close Visit"}
+                            </button>
+                          )}
+                          {["CLOSED", "REJECTED", "EXPIRED", "CANCELLED"].includes(v.status) && (
                             <span className="text-slate-600 text-xs">—</span>
                           )}
                         </td>

@@ -1,67 +1,14 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { submitAssessment as submitAssessmentApi } from "../services/api";
+import {
+  markVideoComplete,
+  submitQuiz,
+  getActiveQuestions,
+  getActiveVideo,
+} from "../services/api";
 
-const QUESTIONS = [
-  {
-    id: 1,
-    question: "What should you do before entering a restricted area on site?",
-    options: [
-      "Walk in if the gate is open",
-      "Obtain a valid permit and wear required PPE",
-      "Ask a colleague to accompany you",
-      "Check your phone for instructions",
-    ],
-    correct: 1,
-  },
-  {
-    id: 2,
-    question: "Which colour hard hat is typically worn by site visitors?",
-    options: [
-      "Yellow – General workers",
-      "Blue – Supervisors",
-      "White – Engineers",
-      "Green – Visitors / new inductees",
-    ],
-    correct: 3,
-  },
-  {
-    id: 3,
-    question: "What is the first action when you discover a fire on site?",
-    options: [
-      "Try to extinguish it immediately",
-      "Raise the alarm and evacuate the area",
-      "Call a colleague first",
-      "Wait to confirm it is a real fire",
-    ],
-    correct: 1,
-  },
-  {
-    id: 4,
-    question: "When must a visitor report an injury or near-miss?",
-    options: [
-      "Only if the injury is severe",
-      "At the end of the work day",
-      "Immediately to the site safety officer",
-      "When filling out the exit form",
-    ],
-    correct: 2,
-  },
-  {
-    id: 5,
-    question: "Which of the following is NOT acceptable on this site?",
-    options: [
-      "Wearing steel-toed boots",
-      "Carrying a valid visitor badge",
-      "Using a mobile phone in a hazardous zone",
-      "Attending a safety briefing",
-    ],
-    correct: 2,
-  },
-];
-
-const PASS_MARK = 0.8; // kept in sync with the backend's PASS_MARK
-const LABELS = ["A", "B", "C", "D"];
+const PASS_MARK = 0.8; // kept in sync with the backend's ASSESSMENT_PASS_THRESHOLD
+const MAX_ATTEMPTS = 3; // Passed → pass issued · Failed → retry, up to 3 attempts total
 
 const ShieldIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" className="w-7 h-7" stroke="currentColor" strokeWidth={1.8}>
@@ -69,6 +16,22 @@ const ShieldIcon = () => (
     <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4" />
   </svg>
 );
+
+// ── Video URL helpers ─────────────────────────────────────────────────────────
+const isYouTubeUrl = (url) => /youtu\.?be/i.test(url || "");
+
+const getYouTubeEmbedUrl = (url) => {
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("youtu.be")) {
+      return `https://www.youtube.com/embed/${u.pathname.slice(1)}`;
+    }
+    const id = u.searchParams.get("v");
+    return id ? `https://www.youtube.com/embed/${id}` : url;
+  } catch {
+    return url;
+  }
+};
 
 function OptionButton({ label, text, selected, revealed, isCorrect, onClick }) {
   let base = "w-full flex items-center gap-4 px-5 py-4 rounded-xl border text-left transition-all duration-200 ";
@@ -114,10 +77,67 @@ function OptionButton({ label, text, selected, revealed, isCorrect, onClick }) {
   );
 }
 
+// ── Video Step — shown before the quiz, if an induction video is configured ──
+function VideoStep({ video, onContinue, submitting }) {
+  const url = video?.url;
+  const embedUrl = url && isYouTubeUrl(url) ? getYouTubeEmbedUrl(url) : null;
+
+  return (
+    <div className="flex flex-col px-1 py-4 max-w-2xl mx-auto w-full">
+      <div className="mb-6">
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">
+          Step 1 of 2 — Safety Induction Video
+        </span>
+        <h2 className="text-lg font-semibold text-white leading-snug mt-2">
+          {video?.title || "Site Safety Induction"}
+        </h2>
+      </div>
+
+      <div className="w-full aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 mb-6">
+        {embedUrl ? (
+          <iframe
+            src={embedUrl}
+            title="Safety induction video"
+            className="w-full h-full"
+            allow="autoplay; encrypted-media"
+            allowFullScreen
+          />
+        ) : url ? (
+          <video src={url} controls className="w-full h-full" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-slate-600 text-sm">
+            No video available
+          </div>
+        )}
+      </div>
+
+      <button
+        onClick={onContinue}
+        disabled={submitting}
+        className="self-start flex items-center gap-2 px-8 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-800 disabled:cursor-not-allowed text-white font-bold rounded-xl text-sm transition shadow-lg shadow-emerald-900/30"
+      >
+        {submitting ? (
+          "Loading…"
+        ) : (
+          <>
+            Continue to Assessment
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+              <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+          </>
+        )}
+      </button>
+    </div>
+  );
+}
+
 // ── Result Screen — no retake, just score + one action button ─────────────────
-function ResultScreen({ score, total, submitting, submitError, onProceed }) {
+function ResultScreen({ score, total, submitting, submitError, attempts, maxAttempts, onProceed, onRetry }) {
   const passed = score / total >= PASS_MARK;
   const pct    = Math.round((score / total) * 100);
+  const attemptsRemaining = maxAttempts - attempts;
+  const canRetry = !passed && attemptsRemaining > 0;
+  const blocked  = !passed && attemptsRemaining <= 0;
 
   return (
     <div className="flex flex-col items-center text-center px-6 py-14 max-w-lg mx-auto">
@@ -143,7 +163,9 @@ function ResultScreen({ score, total, submitting, submitError, onProceed }) {
       <p className="text-slate-400 text-sm mb-6 leading-relaxed max-w-xs">
         {passed
           ? "You have completed the safety assessment. You are now cleared to enter the site."
-          : `You scored ${pct}%. A minimum of ${Math.round(PASS_MARK * 100)}% is required. Please contact the site safety officer.`}
+          : blocked
+          ? `You scored ${pct}%. You've used all ${maxAttempts} attempts. Please contact the site safety officer.`
+          : `You scored ${pct}%. A minimum of ${Math.round(PASS_MARK * 100)}% is required. You have ${attemptsRemaining} attempt${attemptsRemaining === 1 ? "" : "s"} remaining.`}
       </p>
 
       {submitError && (
@@ -152,40 +174,71 @@ function ResultScreen({ score, total, submitting, submitError, onProceed }) {
         </p>
       )}
 
-      <button
-        onClick={onProceed}
-        disabled={submitting}
-        className={`flex items-center gap-2 px-8 py-3 font-bold rounded-xl text-sm transition shadow-lg disabled:opacity-60 disabled:cursor-not-allowed
-          ${passed
-            ? "bg-emerald-500 hover:bg-emerald-400 text-white shadow-emerald-900/30"
-            : "bg-slate-700 hover:bg-slate-600 text-slate-300 shadow-slate-900/30"
-          }`}
-      >
-        {submitting ? (
-          "Saving result…"
-        ) : passed ? (
-          <>
+      <div className="flex items-center gap-3">
+        {canRetry && (
+          <button
+            onClick={onRetry}
+            disabled={submitting}
+            className="flex items-center gap-2 px-8 py-3 font-bold rounded-xl text-sm transition shadow-lg bg-amber-500 hover:bg-amber-400 text-white shadow-amber-900/30 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
             <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-              <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+              <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
             </svg>
-            Enter Site
-          </>
-        ) : (
-          <>
-            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-              <path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" />
-            </svg>
-            Back to Dashboard
-          </>
+            Retry Assessment ({attemptsRemaining} left)
+          </button>
         )}
-      </button>
+        <button
+          onClick={onProceed}
+          disabled={submitting}
+          className={`flex items-center gap-2 px-8 py-3 font-bold rounded-xl text-sm transition shadow-lg disabled:opacity-60 disabled:cursor-not-allowed
+            ${passed
+              ? "bg-emerald-500 hover:bg-emerald-400 text-white shadow-emerald-900/30"
+              : "bg-slate-700 hover:bg-slate-600 text-slate-300 shadow-slate-900/30"
+            }`}
+        >
+          {submitting ? (
+            "Saving result…"
+          ) : passed ? (
+            <>
+              <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+              </svg>
+              Enter Site
+            </>
+          ) : (
+            <>
+              <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                <path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" />
+              </svg>
+              Back to Dashboard
+            </>
+          )}
+        </button>
+      </div>
     </div>
   );
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
+// Anything at or past this stage means the backend won't accept a fresh
+// video/quiz submission for this visitor — mirrors the same list in App.jsx.
+const ALREADY_INDUCTED_STATUSES = [
+  "ASSESSMENT_PASSED",
+  "PASS_GENERATED",
+  "CHECKED_IN",
+  "CHECKED_OUT",
+  "CLOSED",
+];
+
 export default function SafetyAssessment({ visitor, onPass }) {
   const navigate = useNavigate();
+
+  // ── Content loaded from the backend (Admin-managed) ──────────────────────
+  const [phase, setPhase]           = useState("loading"); // loading | video | quiz
+  const [initError, setInitError]   = useState("");
+  const [video, setVideo]           = useState(null);
+  const [questions, setQuestions]   = useState([]);
+  const [continuing, setContinuing] = useState(false); // "Continue to Assessment" button
 
   const [current,  setCurrent]  = useState(0);
   const [selected, setSelected] = useState(null);
@@ -193,16 +246,75 @@ export default function SafetyAssessment({ visitor, onPass }) {
   const [answers,  setAnswers]  = useState([]);
   const [finished, setFinished] = useState(false);
 
-  // Result of POST /visitors/:id/assessment — the backend is the source of
-  // truth for whether the visitor passed (frontend calc is used as a
-  // fallback display only, in case the request fails).
+  // Result of POST /visitors/:id/assessment (stage: "quiz") — the backend is
+  // the source of truth for whether the visitor passed (frontend calc is
+  // used as a fallback display only, in case the request fails).
   const [submitting, setSubmitting]     = useState(false);
   const [submitError, setSubmitError]   = useState("");
   const [backendPassed, setBackendPassed] = useState(null);
+  const [attempts, setAttempts]         = useState(visitor?.induction?.attempts || 0);
 
-  const q     = QUESTIONS[current];
-  const total = QUESTIONS.length;
+  const q     = questions[current];
+  const total = questions.length;
   const score = answers.filter((a) => a.correct).length;
+
+  const alreadyInducted = ALREADY_INDUCTED_STATUSES.includes(visitor?.status);
+
+  // Stale/duplicate visit — visitor already passed induction on a previous
+  // check-in. Don't re-run the quiz against a backend that will 409 the
+  // out-of-order transition; just send them straight to their pass.
+  useEffect(() => {
+    if (!alreadyInducted) return;
+    onPass?.();
+    navigate("/pass", { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alreadyInducted]);
+
+  // Load the active induction video + active quiz questions for this
+  // visitor's plant (falls back to global content if nothing plant-specific
+  // is set — see getActiveVideo/getActiveQuestions on the backend).
+  useEffect(() => {
+    if (alreadyInducted || !visitor?._id) return;
+
+    let cancelled = false;
+    const plantId = visitor?.plant?._id || visitor?.plant;
+
+    (async () => {
+      setPhase("loading");
+      setInitError("");
+      try {
+        const [videoData, questionsData] = await Promise.all([
+          getActiveVideo(plantId).catch(() => null), // no video configured is non-fatal
+          getActiveQuestions(plantId),
+        ]);
+        if (cancelled) return;
+
+        setVideo(videoData);
+        setQuestions(questionsData || []);
+
+        if (!questionsData || questionsData.length === 0) {
+          setInitError("No safety assessment questions are configured yet. Please contact the site administrator.");
+          return;
+        }
+
+        if (videoData && videoData.url) {
+          setPhase("video");
+        } else {
+          // No video configured — mirror the previous behaviour and mark
+          // the video stage complete immediately, then go straight to the quiz.
+          markVideoComplete(visitor._id).catch(() => {});
+          setPhase("quiz");
+        }
+      } catch (err) {
+        if (!cancelled) setInitError(err.message);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visitor?._id, alreadyInducted]);
 
   // Fires once the quiz is finished — reports the score to the backend so
   // it's persisted against the visitor record (and the pass can later be
@@ -220,8 +332,11 @@ export default function SafetyAssessment({ visitor, onPass }) {
 
     (async () => {
       try {
-        const data = await submitAssessmentApi(visitor._id, score, total);
-        if (!cancelled) setBackendPassed(data.passed);
+        const data = await submitQuiz(visitor._id, score, total);
+        if (!cancelled) {
+          setBackendPassed(data.passed);
+          setAttempts(data.visitor?.induction?.attempts ?? attempts + 1);
+        }
       } catch (err) {
         if (!cancelled) setSubmitError(err.message);
       } finally {
@@ -234,6 +349,19 @@ export default function SafetyAssessment({ visitor, onPass }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finished]);
+
+  const handleContinueFromVideo = async () => {
+    setContinuing(true);
+    try {
+      await markVideoComplete(visitor._id);
+    } catch (err) {
+      // Non-fatal — if this silently fails, the quiz submit below will
+      // surface a clearer error (backend will reject an out-of-order quiz).
+    } finally {
+      setContinuing(false);
+      setPhase("quiz");
+    }
+  };
 
   const handleSelect = (idx) => {
     if (revealed) return;
@@ -253,6 +381,25 @@ export default function SafetyAssessment({ visitor, onPass }) {
     } else {
       setFinished(true);
     }
+  };
+
+  // Failed but has attempts left — backend allows FAILED_ASSESSMENT →
+  // VIDEO_COMPLETED (see TRANSITIONS in visitorController.js), so re-run
+  // that transition, then reset the quiz locally for another attempt.
+  const handleRetry = async () => {
+    setSubmitError("");
+    try {
+      await markVideoComplete(visitor._id);
+    } catch (err) {
+      setSubmitError(err.message);
+      return; // don't reset the quiz if the backend refused the retry
+    }
+    setCurrent(0);
+    setSelected(null);
+    setRevealed(false);
+    setAnswers([]);
+    setFinished(false);
+    setBackendPassed(null);
   };
 
   // Prefer the backend's verdict; fall back to the local calc if the
@@ -286,13 +433,24 @@ export default function SafetyAssessment({ visitor, onPass }) {
 
       <div className="flex-1 flex flex-col max-w-2xl w-full mx-auto px-6 py-10">
 
-        {finished ? (
+        {initError ? (
+          <div className="text-center text-red-300 text-sm bg-red-950/60 border border-red-800 rounded-xl px-4 py-6 max-w-md mx-auto">
+            {initError}
+          </div>
+        ) : phase === "loading" ? (
+          <p className="text-center text-slate-500 text-sm py-20">Loading safety assessment…</p>
+        ) : phase === "video" ? (
+          <VideoStep video={video} onContinue={handleContinueFromVideo} submitting={continuing} />
+        ) : finished ? (
           <ResultScreen
             score={score}
             total={total}
             submitting={submitting}
             submitError={submitError}
+            attempts={attempts}
+            maxAttempts={MAX_ATTEMPTS}
             onProceed={handleProceed}
+            onRetry={handleRetry}
           />
         ) : (
           <>
@@ -308,7 +466,7 @@ export default function SafetyAssessment({ visitor, onPass }) {
               </div>
 
               <div className="flex gap-2 mb-3">
-                {QUESTIONS.map((_, i) => (
+                {questions.map((_, i) => (
                   <div
                     key={i}
                     className={`h-1.5 flex-1 rounded-full transition-all duration-300
@@ -351,7 +509,7 @@ export default function SafetyAssessment({ visitor, onPass }) {
               {q.options.map((opt, idx) => (
                 <OptionButton
                   key={idx}
-                  label={LABELS[idx]}
+                  label={String.fromCharCode(65 + idx)}
                   text={opt}
                   selected={selected === idx}
                   revealed={revealed}

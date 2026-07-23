@@ -24,10 +24,12 @@ const LogoutIcon = () => (
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The approve-visitor form itself — same fields/behaviour as before, just now
-// gated behind manager login instead of being open to anyone on the login page.
+// This creates the visitor record at status INVITED — it does NOT put them
+// in Security's gate queue yet. The visitor still has to log in, complete
+// induction (video + quiz), and have their pass generated before Security
+// sees them. See visitorController.js TRANSITIONS for the full pipeline.
 // ─────────────────────────────────────────────────────────────────────────────
-function ApproveVisitorForm({ plants, plantsLoading, plantsError }) {
+function InviteVisitorForm({ plants, plantsLoading, plantsError }) {
   const [name, setName]       = useState("");
   const [phone, setPhone]     = useState("");
   const [company, setCompany] = useState("");
@@ -195,9 +197,9 @@ function ApproveVisitorForm({ plants, plantsLoading, plantsError }) {
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
             </svg>
-            Approving…
+            Sending Invite…
           </>
-        ) : "Approve Visitor"}
+        ) : "Invite Visitor"}
       </button>
     </form>
   );
@@ -222,7 +224,7 @@ export default function ManagerDashboard({ onLogout }) {
   // Guard the route — no token means no business being here.
   useEffect(() => {
     if (!localStorage.getItem("ehs_token")) {
-      navigate("/", { replace: true });
+      navigate("/site", { replace: true });
     }
   }, [navigate]);
 
@@ -236,7 +238,7 @@ export default function ManagerDashboard({ onLogout }) {
   const handleLogout = () => {
     logoutAdmin();
     onLogout?.();
-    navigate("/", { replace: true });
+    navigate("/site", { replace: true });
   };
 
   return (
@@ -270,12 +272,13 @@ export default function ManagerDashboard({ onLogout }) {
 
       <main className="max-w-2xl mx-auto px-6 py-10">
         <div className="mb-6">
-          <h2 className="text-2xl font-bold text-white">Approve a Visitor</h2>
+          <h2 className="text-2xl font-bold text-white">Invite a Visitor</h2>
           <p className="text-slate-400 text-sm mt-1">
-            Enter the incoming visitor's details before they arrive — Security will see them in their queue once approved.
+            They'll need to check in, complete safety induction, and pass the assessment before
+            a pass is generated — only then will Security see them at the gate.
           </p>
         </div>
-        <ApproveVisitorForm plants={plants} plantsLoading={plantsLoading} plantsError={plantsError} />
+        <InviteVisitorForm plants={plants} plantsLoading={plantsLoading} plantsError={plantsError} />
       </main>
     </div>
   );

@@ -1,266 +1,394 @@
-const mongoose = require("mongoose");
+const crypto = require("crypto");
 const Visitor = require("../models/Visitor");
-const Plant = require("../models/Plant");
-const { ApiError } = require("../middleware/errorHandler");
-const asyncHandler = require("../middleware/asyncHandler");
 
-const normalizePhone = (phone) => phone.replace(/\s+/g, "").trim();
-
-// Must match SafetyAssessment.jsx's PASS_MARK — keep these in sync.
-const PASS_MARK = 0.8;
-
-// A Manager's approval, and the Visitor Pass it leads to, are only valid for
-// the calendar day they were created — everything below scopes to "today"
-// (server local time) so nothing from a previous day carries over.
-const getTodayRange = () => {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
-  return { start, end };
+// ─────────────────────────────────────────────────────────────────────────────
+// State machine — the only paths a visitor is allowed to move through.
+// Keeping this server-side (not just in the UI) means a stale/replayed
+// request can never push a visitor into an invalid state.
+// ─────────────────────────────────────────────────────────────────────────────
+const TRANSITIONS = {
+  DRAFT:              ["INVITED", "CANCELLED"],
+  INVITED:            ["INDUCTION_STARTED", "EXPIRED", "CANCELLED", "REJECTED"],
+  INDUCTION_STARTED:  ["VIDEO_COMPLETED", "EXPIRED", "CANCELLED"],
+  VIDEO_COMPLETED:    ["ASSESSMENT_PASSED", "FAILED_ASSESSMENT", "EXPIRED", "CANCELLED"],
+  FAILED_ASSESSMENT:  ["VIDEO_COMPLETED", "CANCELLED"], // retry the quiz
+  ASSESSMENT_PASSED:  ["PASS_GENERATED", "EXPIRED", "CANCELLED"],
+  PASS_GENERATED:     ["CHECKED_IN", "REJECTED", "EXPIRED", "CANCELLED"],
+  CHECKED_IN:         ["CHECKED_OUT"],
+  CHECKED_OUT:        ["CLOSED"],
+  CLOSED:             [],
+  EXPIRED:            [],
+  REJECTED:           [],
+  CANCELLED:          [],
 };
 
-const isFromToday = (date) => {
-  const { start, end } = getTodayRange();
-  const d = new Date(date);
-  return d >= start && d < end;
-};
+// Statuses Security should see WITHOUT asking for the full pipeline —
+// i.e. a Manager's invite alone never lands in Security's default queue.
+const GATE_RELEVANT_STATUSES = [
+  "PASS_GENERATED",
+  "CHECKED_IN",
+  "CHECKED_OUT",
+  "CLOSED",
+  "REJECTED",
+  "EXPIRED",
+  "CANCELLED",
+];
 
-const findVisitorOr404 = async (id) => {
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    throw new ApiError(404, "Visitor not found.");
+// Everything else — shown only when the Security dashboard explicitly asks
+// for pipeline visibility (?includePipeline=true), and read-only there.
+const PRE_GATE_STATUSES = [
+  "DRAFT",
+  "INVITED",
+  "INDUCTION_STARTED",
+  "VIDEO_COMPLETED",
+  "FAILED_ASSESSMENT",
+  "ASSESSMENT_PASSED",
+];
+
+const ASSESSMENT_PASS_THRESHOLD = 0.8; // 80% to pass
+
+function canTransition(from, to) {
+  return (TRANSITIONS[from] || []).includes(to);
+}
+
+async function transition(visitor, to, { timestampField, note, extra = {} } = {}) {
+  if (!canTransition(visitor.status, to)) {
+    const err = new Error(`Cannot move visitor from ${visitor.status} to ${to}.`);
+    err.status = 409;
+    throw err;
   }
-  const visitor = await Visitor.findById(id).populate("plant", "plantCode plantName location");
-  if (!visitor) {
-    throw new ApiError(404, "Visitor not found.");
+  visitor.status = to;
+  if (timestampField) visitor[timestampField] = new Date();
+  visitor.statusHistory.push({ status: to, at: new Date(), note });
+
+  // Use Mongoose's .set() so dot-notation paths like "pass.passId" correctly
+  // write into nested subdocuments — Object.assign treats them as flat
+  // string keys and silently drops them.
+  for (const [path, value] of Object.entries(extra)) {
+    visitor.set(path, value);
   }
+
+  await visitor.save();
   return visitor;
-};
+}
 
-// POST /api/visitors/register — used by the Manager tab to approve/register
-// an incoming visitor. The record starts at status "APPROVED"; Security then
-// handles CHECKED_IN / CHECKED_OUT / REJECTED at the gate.
-const registerVisitor = asyncHandler(async (req, res) => {
-  const { name, phone, company, purpose, host, plant } = req.body;
+function startOfToday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
-  if (!name || !phone || !purpose || !host || !plant) {
-    throw new ApiError(400, "Name, phone, purpose, host and plant are required.");
+// Statuses that represent an unfinished visit which can go stale — mirrors
+// TRANSITIONS: every one of these already allows a direct move to EXPIRED.
+const EXPIRABLE_STATUSES = ["INVITED", "INDUCTION_STARTED", "VIDEO_COMPLETED", "ASSESSMENT_PASSED", "PASS_GENERATED"];
+
+// Lazily flips any visitor still sitting in an unfinished state from a
+// previous day to EXPIRED. Called on read (listVisitors) rather than via a
+// cron job, so it only touches records someone is actually looking at.
+async function expireStaleVisitors(visitors) {
+  const today = startOfToday();
+  for (const v of visitors) {
+    if (!EXPIRABLE_STATUSES.includes(v.status)) continue;
+    if (v.registeredAt && v.registeredAt >= today) continue; // still today — not stale
+    try {
+      await transition(v, "EXPIRED", { timestampField: "expiredAt" });
+    } catch {
+      // Shouldn't happen — EXPIRABLE_STATUSES are all valid EXPIRED sources —
+      // but never let one bad record break the whole list response.
+    }
   }
+}
 
-  const plantDoc = await Plant.findOne({ plantCode: plant.toUpperCase() });
-  if (!plantDoc) {
-    throw new ApiError(400, "Selected plant was not found.");
-  }
+// ── Manager tab — invite/approve a visitor ──────────────────────────────────
+exports.registerVisitor = async (req, res) => {
+  try {
+    const { name, phone, company, purpose, host, plant } = req.body;
 
-  const visitor = await Visitor.create({
-    name: name.trim(),
-    phone: normalizePhone(phone),
-    company: (company || "").trim(),
-    purpose,
-    host: host.trim(),
-    plant: plantDoc._id,
-    status: "APPROVED",
-  });
+    if (!name || !phone || !purpose || !host || !plant) {
+      return res.status(400).json({ message: "Missing required fields." });
+    }
 
-  res.status(201).json({
-    message: `Approved "${visitor.name}" for ${plantDoc.plantName}. Security can now check them in at the gate.`,
-    visitor,
-  });
-});
+    // `plant` may arrive as either a Mongo _id (from a fixed dropdown) or a
+    // human-readable plantCode (from QR/manual entry) — resolve either way
+    // so a bad string never reaches Mongoose's ObjectId cast.
+    const Plant = require("../models/Plant");
+    const plantDoc = /^[0-9a-fA-F]{24}$/.test(plant)
+      ? await Plant.findById(plant)
+      : await Plant.findOne({ plantCode: plant });
 
-// GET /api/visitors?plant=CODE&status=APPROVED — used by the Security tab's
-// list view. Only shows visitors approved TODAY — a Manager's approval (and
-// the pass it leads to) expires at midnight, so yesterday's visitors never
-// show up here even if they were never checked in/out.
-const listVisitors = asyncHandler(async (req, res) => {
-  const { plant, status } = req.query;
-  const { start, end } = getTodayRange();
-  const filter = { registeredAt: { $gte: start, $lt: end } };
-
-  if (plant) {
-    const plantDoc = await Plant.findOne({ plantCode: String(plant).toUpperCase() });
     if (!plantDoc) {
-      throw new ApiError(400, "Selected plant was not found.");
+      return res.status(400).json({ message: `Unknown plant: "${plant}". Please select a valid plant.` });
     }
-    filter.plant = plantDoc._id;
+
+    const visitor = await Visitor.create({
+      name,
+      phone: phone.replace(/\D/g, ""),
+      company,
+      purpose,
+      host,
+      plant: plantDoc._id,
+      registeredBy: req.user?._id,
+      status: "INVITED",
+      invitedAt: new Date(),
+      statusHistory: [{ status: "INVITED", at: new Date() }],
+    });
+
+    res.status(201).json({
+      message: `${name} has been invited. They'll appear at the gate once induction and their pass are complete.`,
+      visitor,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
-
-  // Counts reflect the day + plant scope regardless of the status filter,
-  // so the summary badges stay accurate no matter which status is selected.
-  const countRows = await Visitor.aggregate([
-    { $match: filter },
-    { $group: { _id: "$status", count: { $sum: 1 } } },
-  ]);
-  const counts = { APPROVED: 0, CHECKED_IN: 0, CHECKED_OUT: 0, REJECTED: 0 };
-  for (const row of countRows) counts[row._id] = row.count;
-
-  if (status) {
-    if (!["APPROVED", "CHECKED_IN", "CHECKED_OUT", "REJECTED"].includes(status)) {
-      throw new ApiError(400, "Invalid status filter.");
-    }
-    filter.status = status;
-  }
-
-  const visitors = await Visitor.find(filter)
-    .sort({ registeredAt: -1 })
-    .limit(200)
-    .populate("plant", "plantCode plantName location");
-
-  res.json({ visitors, counts });
-});
-
-// POST /api/visitors/:id/checkin — Security marks an approved visitor as
-// physically checked in at the gate.
-const securityCheckIn = asyncHandler(async (req, res) => {
-  const visitor = await findVisitorOr404(req.params.id);
-
-  if (visitor.status !== "APPROVED") {
-    throw new ApiError(400, "Only approved visitors awaiting arrival can be checked in.");
-  }
-
-  visitor.status = "CHECKED_IN";
-  visitor.checkedInAt = new Date();
-  await visitor.save();
-
-  res.json({ visitor });
-});
-
-// POST /api/visitors/:id/checkout — Security marks a checked-in visitor as
-// having left the site.
-const securityCheckOut = asyncHandler(async (req, res) => {
-  const visitor = await findVisitorOr404(req.params.id);
-
-  if (visitor.status !== "CHECKED_IN") {
-    throw new ApiError(400, "Only checked-in visitors can be checked out.");
-  }
-
-  visitor.status = "CHECKED_OUT";
-  visitor.checkedOutAt = new Date();
-  await visitor.save();
-
-  res.json({ visitor });
-});
-
-// POST /api/visitors/:id/reject — Security declines an approved visitor
-// before they're checked in (e.g. ID doesn't match, no longer expected).
-const rejectVisitor = asyncHandler(async (req, res) => {
-  const visitor = await findVisitorOr404(req.params.id);
-
-  if (visitor.status !== "APPROVED") {
-    throw new ApiError(400, "Only approved visitors awaiting arrival can be rejected.");
-  }
-
-  visitor.status = "REJECTED";
-  visitor.rejectedAt = new Date();
-  await visitor.save();
-
-  res.json({ visitor });
-});
-
-// POST /api/visitors/checkin — used by the Visitor tab (phone number only).
-// This is the visitor's own app-session login, separate from Security's
-// physical gate check-in/out above — it doesn't change `status`.
-// Only matches a visitor APPROVED TODAY — yesterday's approval has expired,
-// so the visitor needs a fresh Manager approval to get in today.
-const checkinVisitor = asyncHandler(async (req, res) => {
-  const { phone } = req.body;
-
-  if (!phone) {
-    throw new ApiError(400, "Phone number is required.");
-  }
-
-  const { start, end } = getTodayRange();
-
-  const visitor = await Visitor.findOne({
-    phone: normalizePhone(phone),
-    registeredAt: { $gte: start, $lt: end },
-  })
-    .sort({ registeredAt: -1 }) // most recent approval for that number, today
-    .populate("plant", "plantCode plantName location");
-
-  if (!visitor) {
-    throw new ApiError(404, "No approved visitor record found for today. Please contact your host or the site office for a new approval.");
-  }
-
-  if (visitor.status === "REJECTED") {
-    throw new ApiError(403, "This visit request was rejected. Please contact the site office.");
-  }
-
-  res.json({ visitor });
-});
-
-// GET /api/visitors/:id — used to rehydrate VisitorDashboard on page refresh.
-// If the visitor's approval wasn't from today, treat the session as expired
-// so the app clears it and sends them back to login for a fresh approval.
-const getVisitorById = asyncHandler(async (req, res) => {
-  const visitor = await findVisitorOr404(req.params.id);
-
-  if (!isFromToday(visitor.registeredAt)) {
-    throw new ApiError(410, "Your approved visit has expired. Please get a new approval for today.");
-  }
-
-  res.json({ visitor });
-});
-
-// POST /api/visitors/:id/assessment — called by SafetyAssessment when the quiz finishes.
-const submitAssessment = asyncHandler(async (req, res) => {
-  const { score, total } = req.body;
-
-  if (typeof score !== "number" || typeof total !== "number" || total <= 0) {
-    throw new ApiError(400, "score and total are required numbers.");
-  }
-
-  const visitor = await findVisitorOr404(req.params.id);
-
-  const passed = score / total >= PASS_MARK;
-
-  visitor.induction.assessmentScore = score;
-  visitor.induction.assessmentTotal = total;
-  visitor.induction.attemptedAt = new Date();
-  visitor.induction.status = passed ? "PASSED" : "FAILED";
-  if (passed) visitor.induction.completedAt = new Date();
-
-  await visitor.save();
-
-  res.json({ visitor, passed });
-});
-
-// POST /api/visitors/:id/pass — issues (or returns the existing) Visitor Pass.
-// Only visitors whose induction has PASSED can be issued a pass.
-const issuePass = asyncHandler(async (req, res) => {
-  const visitor = await findVisitorOr404(req.params.id);
-
-  if (visitor.induction.status !== "PASSED") {
-    throw new ApiError(403, "Complete and pass the safety assessment before a pass can be issued.");
-  }
-
-  // Idempotent — a visitor gets exactly one pass per visit.
-  if (!visitor.pass?.passId) {
-    const now = new Date();
-    const validUntil = new Date(now);
-    validUntil.setHours(23, 59, 59, 999);
-
-    const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
-    const randPart = Math.random().toString(36).slice(2, 7).toUpperCase();
-
-    visitor.pass = {
-      passId: `EHS-${datePart}-${randPart}`,
-      issuedAt: now,
-      validUntil,
-    };
-    await visitor.save();
-  }
-
-  res.json({ visitor });
-});
-
-module.exports = {
-  registerVisitor,
-  checkinVisitor,
-  getVisitorById,
-  submitAssessment,
-  issuePass,
-  listVisitors,
-  securityCheckIn,
-  securityCheckOut,
-  rejectVisitor,
 };
+
+// ── Visitor tab — app login by phone ────────────────────────────────────────
+exports.checkinVisitor = async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ message: "Phone number is required." });
+
+    const normalized = phone.replace(/\D/g, "");
+
+    // Most recent non-terminal visit for this number.
+    const visitor = await Visitor.findOne({
+      phone: normalized,
+      status: { $in: ["INVITED", "INDUCTION_STARTED", "VIDEO_COMPLETED", "FAILED_ASSESSMENT", "ASSESSMENT_PASSED", "PASS_GENERATED", "CHECKED_IN"] },
+    }).sort({ invitedAt: -1 });
+
+    if (!visitor) {
+      // Check if the most recent record for this number was rejected/expired,
+      // to give a more useful error than a bare 404.
+      const last = await Visitor.findOne({ phone: normalized }).sort({ registeredAt: -1 });
+      if (last?.status === "REJECTED") {
+        return res.status(403).json({ message: "Your visit request was rejected." });
+      }
+      if (last?.status === "EXPIRED") {
+        return res.status(410).json({ message: "Your invitation has expired. Please ask your host to re-invite you." });
+      }
+      return res.status(404).json({ message: "No approved visit found for this number." });
+    }
+
+    // First login kicks off induction; re-logins are idempotent rehydration.
+    if (visitor.status === "INVITED") {
+      await transition(visitor, "INDUCTION_STARTED", { timestampField: "inductionStartedAt" });
+    }
+
+    res.json({ visitor });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+// ── Rehydrate VisitorDashboard on refresh ───────────────────────────────────
+exports.getVisitorById = async (req, res) => {
+  try {
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ message: "Visitor not found." });
+    res.json({ visitor });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ── SafetyAssessment page — video-complete and quiz-submit, two stages ─────
+// Body: { stage: "video" }                     → marks the safety video watched
+// Body: { stage: "quiz", score, total }         → grades the quiz
+exports.submitAssessment = async (req, res) => {
+  try {
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ message: "Visitor not found." });
+
+    const { stage, score, total } = req.body;
+
+    if (stage === "video") {
+      await transition(visitor, "VIDEO_COMPLETED", { timestampField: "videoCompletedAt" });
+      return res.json({ visitor });
+    }
+
+    if (stage === "quiz") {
+      if (typeof score !== "number" || typeof total !== "number" || total <= 0) {
+        return res.status(400).json({ message: "score and total are required." });
+      }
+      const passed = score / total >= ASSESSMENT_PASS_THRESHOLD;
+
+      await transition(visitor, passed ? "ASSESSMENT_PASSED" : "FAILED_ASSESSMENT", {
+        timestampField: passed ? "assessmentPassedAt" : "failedAssessmentAt",
+        extra: {
+          "induction.assessmentScore": score,
+          "induction.assessmentTotal": total,
+          "induction.attemptedAt": new Date(),
+          "induction.attempts": (visitor.induction?.attempts || 0) + 1,
+        },
+      });
+
+      return res.json({ visitor, passed });
+    }
+
+    return res.status(400).json({ message: "stage must be 'video' or 'quiz'." });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+// ── VisitorPass page — issue the pass once assessment is passed ────────────
+// Idempotent: if a pass already exists (status is PASS_GENERATED or the
+// visitor has already moved further through the gate flow — CHECKED_IN,
+// CHECKED_OUT, CLOSED), just return the existing pass instead of trying to
+// transition again. A visitor re-logging in with the same phone number
+// (see checkinVisitor) will hit this route again through the normal page
+// flow, and that must not be treated as an error.
+const PASS_ALREADY_ISSUED_STATUSES = ["PASS_GENERATED", "CHECKED_IN", "CHECKED_OUT", "CLOSED"];
+
+exports.issuePass = async (req, res) => {
+  try {
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ message: "Visitor not found." });
+
+    if (PASS_ALREADY_ISSUED_STATUSES.includes(visitor.status)) {
+      // Already has a pass — just hand it back.
+      return res.json({ visitor });
+    }
+
+    const passId = `EHS-${visitor.plant.toString().slice(-4).toUpperCase()}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+    const validUntil = new Date();
+    validUntil.setHours(23, 59, 59, 999); // valid through end of day
+
+    await transition(visitor, "PASS_GENERATED", {
+      timestampField: "passGeneratedAt",
+      extra: {
+        "pass.passId": passId,
+        "pass.issuedAt": new Date(),
+        "pass.validUntil": validUntil,
+      },
+    });
+
+    res.json({ visitor });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+// ── Security tab — list visitors ────────────────────────────────────────────
+// Default: only gate-relevant statuses (pass generated onward), scoped to
+// today — mirrors the old "today's approvals only" behaviour so a stale pass
+// from yesterday doesn't linger in the queue.
+// Pass ?includePipeline=true to additionally see pre-gate visitors
+// (Invited / Induction Started / etc.) — read-only, informational only.
+// Pass ?includeAll=true (Admin dashboard) to see every status across every
+// date — Admin needs full history, not just today's records.
+exports.listVisitors = async (req, res) => {
+  try {
+    const { plant, status, includePipeline, includeAll } = req.query;
+
+    const query = {};
+    if (plant) query.plant = plant;
+
+    if (status) {
+      query.status = status;
+    } else if (includeAll === "true" || includePipeline === "true") {
+      // includeAll (Admin) and includePipeline (Security's pipeline view)
+      // both want every status visible — gate-relevant and pre-gate.
+      query.status = { $in: [...GATE_RELEVANT_STATUSES, ...PRE_GATE_STATUSES] };
+    } else {
+      query.status = { $in: GATE_RELEVANT_STATUSES };
+    }
+
+    // Scope active (non-terminal) records to today — this exists for
+    // Security's gate queue so a stale pass from yesterday doesn't linger
+    // there. Admin (includeAll=true) is exempt: it needs full history,
+    // not just today's records.
+    if (includeAll !== "true") {
+      const ACTIVE_STATUSES = ["PASS_GENERATED", "CHECKED_IN", "INVITED", "INDUCTION_STARTED", "VIDEO_COMPLETED", "ASSESSMENT_PASSED"];
+      query.$or = [
+        { status: { $nin: ACTIVE_STATUSES } },
+        { registeredAt: { $gte: startOfToday() } },
+      ];
+    }
+
+    const visitors = await Visitor.find(query)
+      .populate("plant", "plantName plantCode location")
+      .sort({ registeredAt: -1 });
+
+    // Only worth sweeping when the caller can actually see stale records —
+    // Security's default (today-only) query never returns anything old
+    // enough to expire, so skip the extra writes there.
+    if (includeAll === "true" || includePipeline === "true") {
+      await expireStaleVisitors(visitors);
+    }
+
+    const counts = {};
+    for (const s of Visitor.STATUSES) counts[s] = 0;
+    for (const v of visitors) counts[v.status] = (counts[v.status] || 0) + 1;
+
+    res.json({ visitors, counts });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ── Security — physical check-in at the gate ────────────────────────────────
+exports.securityCheckIn = async (req, res) => {
+  try {
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ message: "Visitor not found." });
+    await transition(visitor, "CHECKED_IN", { timestampField: "checkedInAt" });
+    res.json({ visitor });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+// ── Security — physical check-out at the gate ───────────────────────────────
+exports.securityCheckOut = async (req, res) => {
+  try {
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ message: "Visitor not found." });
+    await transition(visitor, "CHECKED_OUT", { timestampField: "checkedOutAt" });
+    res.json({ visitor });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+// ── Security/Admin — close out a finished visit ──────────────────────────────
+exports.closeVisitor = async (req, res) => {
+  try {
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ message: "Visitor not found." });
+    await transition(visitor, "CLOSED", { timestampField: "closedAt" });
+    res.json({ visitor });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+// ── Security — reject at the gate (or Manager, before the gate) ────────────
+exports.rejectVisitor = async (req, res) => {
+  try {
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ message: "Visitor not found." });
+    await transition(visitor, "REJECTED", {
+      timestampField: "rejectedAt",
+      extra: req.body?.reason ? { rejectionReason: req.body.reason } : {},
+    });
+    res.json({ visitor });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+// ── Cancel — visitor or host backs out before arrival ───────────────────────
+exports.cancelVisitor = async (req, res) => {
+  try {
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ message: "Visitor not found." });
+    await transition(visitor, "CANCELLED", { timestampField: "cancelledAt" });
+    res.json({ visitor });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+exports.GATE_RELEVANT_STATUSES = GATE_RELEVANT_STATUSES;
+exports.PRE_GATE_STATUSES = PRE_GATE_STATUSES;

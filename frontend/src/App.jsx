@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import EHSLoginPage from "./page/Ehsloginpage";
+import StaffLoginPage from "./page/Staffloginpage";
 import Dashboard from "./component/Dashboard";
 import VisitorDashboard from "./page/Visitordashboard";
 import SafetyAssessment from "./page/Safetyassessment";
@@ -11,6 +12,27 @@ import { useEffect, useState } from "react";
 import { getVisitor } from "./services/api";
 
 const VISITOR_ID_KEY = "ehs_visitor_id";
+
+// Anything at or past ASSESSMENT_PASSED means induction is already done —
+// matches the status enum described in services/api.js.
+const INDUCTION_COMPLETE_STATUSES = [
+  "ASSESSMENT_PASSED",
+  "PASS_GENERATED",
+  "CHECKED_IN",
+  "CHECKED_OUT",
+  "CLOSED",
+];
+const isInductionDone = (visitor) =>
+  INDUCTION_COMPLETE_STATUSES.includes(visitor?.status);
+
+// A visitor pass is only valid for the day it was registered — once the
+// calendar day has moved on, don't silently resume it from localStorage;
+// treat it as expired and drop back to a fresh login.
+const isSessionExpired = (visitor) => {
+  const registered = new Date(visitor?.registeredAt || visitor?.invitedAt || 0);
+  const today = new Date();
+  return registered.toDateString() !== today.toDateString();
+};
 
 // Reads the role off whatever staff user (Admin or Manager) is currently
 // stored, so a page refresh doesn't lose the session.
@@ -46,13 +68,20 @@ function App() {
       return;
     }
 
-    let cancelled = false;
+   let cancelled = false;
     (async () => {
       try {
         const { visitor } = await getVisitor(storedId);
         if (cancelled) return;
+
+        if (isSessionExpired(visitor)) {
+          // Old day's pass — don't resume it, force a fresh check-in.
+          localStorage.removeItem(VISITOR_ID_KEY);
+          return;
+        }
+
         setVisitorData(visitor);
-        setInductionDone(visitor.induction?.status === "PASSED");
+        setInductionDone(isInductionDone(visitor));
       } catch {
         // Stale/invalid id — clear it and fall back to the login page.
         localStorage.removeItem(VISITOR_ID_KEY);
@@ -68,7 +97,7 @@ function App() {
 
   const handleVisitorCheckin = (visitor) => {
     setVisitorData(visitor);
-    setInductionDone(visitor?.induction?.status === "PASSED");
+    setInductionDone(isInductionDone(visitor));
     if (visitor?._id) localStorage.setItem(VISITOR_ID_KEY, visitor._id);
   };
 
@@ -78,9 +107,10 @@ function App() {
     localStorage.removeItem(VISITOR_ID_KEY);
   };
 
-  // Shared by both AdminForm and ManagerLoginForm in Ehsloginpage.jsx — the
-  // token is already stashed in localStorage by the form itself, we just
-  // need the user's role to know which dashboard route to unlock.
+  // Shared by AdminForm / ManagerLoginForm / SecurityLoginForm on the
+  // Staffloginpage.jsx — the token is already stashed in localStorage by the
+  // form itself, we just need the user's role to know which dashboard route
+  // to unlock.
   const handleStaffLoginSuccess = (user) => {
     if (user) localStorage.setItem("ehs_user", JSON.stringify(user));
     setStaffRole(user?.role || null);
@@ -102,14 +132,24 @@ function App() {
   return (
     <Router>
       <Routes>
-        {/* Login — always accessible */}
+        {/* Visitor Login — public, default landing page. No staff options shown. */}
         <Route
           path="/"
           element={
             <EHSLoginPage
               onLoginSuccess={() => setIsLoggedIn(true)}
-              onStaffLoginSuccess={handleStaffLoginSuccess}
               onVisitorCheckin={handleVisitorCheckin}
+            />
+          }
+        />
+
+        {/* Staff Login — separate URL. Security/Admin/Manager sign-in lives
+            ONLY here; visitors never see or reach this from "/". */}
+        <Route
+          path="/site"
+          element={
+            <StaffLoginPage
+              onStaffLoginSuccess={handleStaffLoginSuccess}
             />
           }
         />
@@ -130,7 +170,7 @@ function App() {
           element={
             staffRole === "ADMIN"
               ? <AdminDashboard onLogout={handleStaffLogout} />
-              : <Navigate to="/" />
+              : <Navigate to="/site" />
           }
         />
 
@@ -140,7 +180,7 @@ function App() {
           element={
             staffRole === "MANAGER"
               ? <ManagerDashboard onLogout={handleStaffLogout} />
-              : <Navigate to="/" />
+              : <Navigate to="/site" />
           }
         />
 
@@ -181,14 +221,14 @@ function App() {
           }
         />
         {/* Security Dashboard — gate check-in/out */}
-<Route
-  path="/security"
-  element={
-    staffRole === "SECURITY"
-      ? <SecurityDashboard onLogout={handleStaffLogout} />
-      : <Navigate to="/" />
-  }
-/>
+        <Route
+          path="/security"
+          element={
+            staffRole === "SECURITY"
+              ? <SecurityDashboard onLogout={handleStaffLogout} />
+              : <Navigate to="/site" />
+          }
+        />
 
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>

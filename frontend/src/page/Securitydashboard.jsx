@@ -5,6 +5,7 @@ import {
   listVisitors,
   securityCheckIn,
   securityCheckOut,
+  closeVisitor,
   rejectVisitor,
   logoutAdmin,
 } from "../services/api";
@@ -29,31 +30,60 @@ const BuildingIcon = () => (
   </svg>
 );
 
+const EyeIcon = () => (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+    <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+    <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+  </svg>
+);
+
+// ── Gate-relevant statuses: what Security acts on ───────────────────────────
 const STATUS_STYLES = {
-  APPROVED:    "bg-amber-500/20 text-amber-300 border-amber-700/50",
-  CHECKED_IN:  "bg-emerald-500/20 text-emerald-300 border-emerald-700/50",
-  CHECKED_OUT: "bg-slate-700/50 text-slate-400 border-slate-600/50",
-  REJECTED:    "bg-red-500/20 text-red-300 border-red-700/50",
+  PASS_GENERATED: "bg-amber-500/20 text-amber-300 border-amber-700/50",
+  CHECKED_IN:     "bg-emerald-500/20 text-emerald-300 border-emerald-700/50",
+  CHECKED_OUT:    "bg-sky-500/20 text-sky-300 border-sky-700/50",
+  CLOSED:         "bg-slate-700/50 text-slate-400 border-slate-600/50",
+  REJECTED:       "bg-red-500/20 text-red-300 border-red-700/50",
+  EXPIRED:        "bg-orange-500/20 text-orange-300 border-orange-700/50",
+  CANCELLED:      "bg-slate-700/50 text-slate-500 border-slate-600/50",
+  // Pre-gate (pipeline view only, read-only)
+  DRAFT:              "bg-slate-700/40 text-slate-500 border-slate-600/40",
+  INVITED:            "bg-blue-500/20 text-blue-300 border-blue-700/50",
+  INDUCTION_STARTED:  "bg-indigo-500/20 text-indigo-300 border-indigo-700/50",
+  VIDEO_COMPLETED:    "bg-purple-500/20 text-purple-300 border-purple-700/50",
+  FAILED_ASSESSMENT:  "bg-red-500/15 text-red-300/80 border-red-800/40",
+  ASSESSMENT_PASSED:  "bg-teal-500/20 text-teal-300 border-teal-700/50",
 };
 
 const STATUS_LABELS = {
-  APPROVED: "Awaiting Arrival",
+  DRAFT: "Draft",
+  INVITED: "Invited",
+  INDUCTION_STARTED: "Induction Started",
+  VIDEO_COMPLETED: "Video Completed",
+  FAILED_ASSESSMENT: "Failed Assessment",
+  ASSESSMENT_PASSED: "Assessment Passed",
+  PASS_GENERATED: "Ready at Gate",
   CHECKED_IN: "Checked In",
   CHECKED_OUT: "Checked Out",
+  CLOSED: "Closed",
   REJECTED: "Rejected",
+  EXPIRED: "Expired",
+  CANCELLED: "Cancelled",
 };
 
-const STATUS_FILTERS = [
-  { value: "",            label: "All" },
-  { value: "APPROVED",    label: "Awaiting" },
-  { value: "CHECKED_IN",  label: "Checked In" },
-  { value: "CHECKED_OUT", label: "Checked Out" },
-  { value: "REJECTED",    label: "Rejected" },
+// Filter chips shown in the default (gate-only) view.
+const GATE_STATUS_FILTERS = [
+  { value: "",               label: "All" },
+  { value: "PASS_GENERATED", label: "Ready" },
+  { value: "CHECKED_IN",     label: "Checked In" },
+  { value: "CHECKED_OUT",    label: "Checked Out" },
+  { value: "CLOSED",         label: "Closed" },
+  { value: "REJECTED",       label: "Rejected" },
 ];
 
-const countFor = (counts, value) => {
+const countFor = (counts, value, statuses) => {
   if (!counts) return 0;
-  if (!value) return counts.APPROVED + counts.CHECKED_IN + counts.CHECKED_OUT + counts.REJECTED;
+  if (!value) return statuses.reduce((sum, s) => sum + (counts[s] || 0), 0);
   return counts[value] ?? 0;
 };
 
@@ -68,22 +98,26 @@ export default function SecurityDashboard({ onLogout }) {
     }
   });
 
-  const [plants, setPlants]             = useState([]);
+  const [plants, setPlants]               = useState([]);
   const [plantsLoading, setPlantsLoading] = useState(true);
-  const [plantsError, setPlantsError]   = useState("");
+  const [plantsError, setPlantsError]     = useState("");
 
   const [plantFilter, setPlantFilter]   = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [visitors, setVisitors]         = useState([]);
-  const [counts, setCounts]             = useState(null);
-  const [loading, setLoading]           = useState(true);
-  const [error, setError]               = useState("");
-  const [actioningId, setActioningId]   = useState(null);
+  // Off by default — a Manager's invite does NOT show up here until this is
+  // switched on. Even then, pre-gate visitors are shown read-only.
+  const [showPipeline, setShowPipeline] = useState(false);
+
+  const [visitors, setVisitors]       = useState([]);
+  const [counts, setCounts]           = useState(null);
+  const [loading, setLoading]         = useState(true);
+  const [error, setError]             = useState("");
+  const [actioningId, setActioningId] = useState(null);
 
   // Guard the route — no token means no business being here.
   useEffect(() => {
     if (!localStorage.getItem("ehs_token")) {
-      navigate("/", { replace: true });
+      navigate("/site", { replace: true });
     }
   }, [navigate]);
 
@@ -94,17 +128,17 @@ export default function SecurityDashboard({ onLogout }) {
       .finally(() => setPlantsLoading(false));
   }, []);
 
-  const loadVisitors = async (plantCode, status) => {
+  const loadVisitors = async (plantId, status, includePipeline) => {
     setLoading(true);
     setError("");
     try {
-      const data = await listVisitors(plantCode || undefined, status || undefined);
+      const data = await listVisitors(plantId || undefined, status || undefined, includePipeline);
       setVisitors(data.visitors);
       setCounts(data.counts);
     } catch (err) {
       if (err.status === 401 || err.status === 403) {
         logoutAdmin();
-        navigate("/", { replace: true });
+        navigate("/site", { replace: true });
         return;
       }
       setError(err.message);
@@ -114,9 +148,9 @@ export default function SecurityDashboard({ onLogout }) {
   };
 
   useEffect(() => {
-    loadVisitors(plantFilter, statusFilter);
+    loadVisitors(plantFilter, statusFilter, showPipeline);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plantFilter, statusFilter]);
+  }, [plantFilter, statusFilter, showPipeline]);
 
   const runAction = async (id, action) => {
     setActioningId(id);
@@ -124,9 +158,9 @@ export default function SecurityDashboard({ onLogout }) {
     try {
       await action(id);
       // The action may move a visitor out of the currently-filtered status
-      // (e.g. Check In while filtered to "Awaiting") — simplest correct
+      // (e.g. Check In while filtered to "Ready") — simplest correct
       // behaviour is to just reload the list + counts.
-      await loadVisitors(plantFilter, statusFilter);
+      await loadVisitors(plantFilter, statusFilter, showPipeline);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -137,8 +171,10 @@ export default function SecurityDashboard({ onLogout }) {
   const handleLogout = () => {
     logoutAdmin();
     onLogout?.();
-    navigate("/", { replace: true });
+    navigate("/site", { replace: true });
   };
+
+  const gateVisitors = visitors.filter((v) => !showPipeline || true); // list already scoped server-side
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -170,12 +206,16 @@ export default function SecurityDashboard({ onLogout }) {
       </header>
 
       <main className="max-w-2xl mx-auto px-6 py-10 space-y-4">
-        <div>
-          <h2 className="text-2xl font-bold text-white">Gate Check-In</h2>
-          <p className="text-slate-400 text-sm mt-1">Check in, check out, or reject manager-approved visitors.</p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white">Gate Check-In</h2>
+            <p className="text-slate-400 text-sm mt-1">
+              Visitors appear here once their pass is generated — not as soon as a Manager invites them.
+            </p>
+          </div>
         </div>
 
-        <p className="text-xs text-slate-500 -mt-1">Showing today's approvals only — a new day needs a new approval.</p>
+        <p className="text-xs text-slate-500 -mt-1">Active statuses are scoped to today — a new day needs a new invite.</p>
 
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
@@ -192,7 +232,10 @@ export default function SecurityDashboard({ onLogout }) {
               {plantsLoading ? "Loading plants…" : plantsError ? "Could not load plants" : "All plants"}
             </option>
             {plants.map((p) => (
-              <option key={p._id} value={p.plantCode}>
+              // Send the real Mongo _id — matches what listVisitors()/the backend's
+              // `query.plant = plant` expects. plantCode caused "Cast to ObjectId
+              // failed" 500 errors, same issue already fixed in AdminDashboard.jsx.
+              <option key={p._id} value={p._id}>
                 {p.plantName} — {p.location}
               </option>
             ))}
@@ -200,8 +243,8 @@ export default function SecurityDashboard({ onLogout }) {
           {plantsError && <p className="text-xs text-red-400 mt-1.5">{plantsError}</p>}
         </div>
 
-        <div className="grid grid-cols-5 gap-1 bg-slate-800 rounded-xl p-1">
-          {STATUS_FILTERS.map((f) => (
+        <div className="grid grid-cols-6 gap-1 bg-slate-800 rounded-xl p-1">
+          {GATE_STATUS_FILTERS.map((f) => (
             <button
               key={f.value || "all"}
               onClick={() => setStatusFilter(f.value)}
@@ -209,11 +252,22 @@ export default function SecurityDashboard({ onLogout }) {
                 statusFilter === f.value ? "bg-amber-500 text-white shadow" : "text-slate-400 hover:text-white"
               }`}
             >
-              <span className="text-sm font-bold">{countFor(counts, f.value)}</span>
+              <span className="text-sm font-bold">
+                {countFor(counts, f.value, f.value ? [f.value] : GATE_STATUS_FILTERS.slice(1).map((x) => x.value))}
+              </span>
               <span>{f.label}</span>
             </button>
           ))}
         </div>
+
+        {/* Optional, explicit visibility into pre-gate stages — read-only */}
+        <button
+          onClick={() => setShowPipeline((v) => !v)}
+          className="w-full flex items-center justify-center gap-2 text-xs text-slate-400 hover:text-white bg-slate-900 border border-slate-800 rounded-lg py-2.5 transition"
+        >
+          <EyeIcon />
+          {showPipeline ? "Hide pre-gate pipeline (Invited → Assessment Passed)" : "Show pre-gate pipeline (Invited → Assessment Passed)"}
+        </button>
 
         {error && (
           <div className="flex items-start gap-2.5 bg-red-950/60 border border-red-800 text-red-300 text-sm rounded-lg px-4 py-3">
@@ -226,14 +280,19 @@ export default function SecurityDashboard({ onLogout }) {
 
         {loading ? (
           <p className="text-slate-500 text-sm text-center py-8">Loading visitors…</p>
-        ) : visitors.length === 0 ? (
+        ) : gateVisitors.length === 0 ? (
           <p className="text-slate-500 text-sm text-center py-8">No visitors match this filter today.</p>
         ) : (
           <div className="space-y-3">
-            {visitors.map((v) => {
+            {gateVisitors.map((v) => {
               const busy = actioningId === v._id;
+              const isPreGate = ["DRAFT", "INVITED", "INDUCTION_STARTED", "VIDEO_COMPLETED", "FAILED_ASSESSMENT", "ASSESSMENT_PASSED"].includes(v.status);
+
               return (
-                <div key={v._id} className="bg-slate-800/60 border border-slate-700 rounded-xl p-4">
+                <div
+                  key={v._id}
+                  className={`bg-slate-800/60 border rounded-xl p-4 ${isPreGate ? "border-slate-800 opacity-70" : "border-slate-700"}`}
+                >
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div>
                       <p className="text-white font-semibold text-sm">{v.name}</p>
@@ -247,7 +306,13 @@ export default function SecurityDashboard({ onLogout }) {
                     </span>
                   </div>
 
-                  {v.status === "APPROVED" && (
+                  {isPreGate && (
+                    <p className="text-[11px] text-slate-500 italic mt-1">
+                      Not actionable yet — waiting on induction / assessment.
+                    </p>
+                  )}
+
+                  {v.status === "PASS_GENERATED" && (
                     <div className="flex gap-2 mt-3">
                       <button
                         disabled={busy}
@@ -270,9 +335,19 @@ export default function SecurityDashboard({ onLogout }) {
                     <button
                       disabled={busy}
                       onClick={() => runAction(v._id, securityCheckOut)}
-                      className="w-full mt-3 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg py-2 transition"
+                      className="w-full mt-3 bg-sky-600 hover:bg-sky-500 disabled:bg-sky-900 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg py-2 transition"
                     >
                       {busy ? "…" : "Check Out"}
+                    </button>
+                  )}
+
+                  {v.status === "CHECKED_OUT" && (
+                    <button
+                      disabled={busy}
+                      onClick={() => runAction(v._id, closeVisitor)}
+                      className="w-full mt-3 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg py-2 transition"
+                    >
+                      {busy ? "…" : "Close Visit"}
                     </button>
                   )}
                 </div>

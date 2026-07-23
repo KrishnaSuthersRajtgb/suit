@@ -7,11 +7,13 @@ const { notFound, errorHandler } = require("./middleware/errorHandler");
 const authRoutes = require("./routes/authRoutes");
 const plantRoutes = require("./routes/plantRoutes");
 const visitorRoutes = require("./routes/visitorRoutes");
+const questionRoutes = require("./routes/questionRoutes");
+const videoRoutes = require("./routes/videoRoutes");
+const userRoutes = require("./routes/userRoutes");
 
 connectDB();
 
 const app = express();
-
 
 const allowedOrigins = [
   "http://localhost:5173",
@@ -37,6 +39,9 @@ app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 app.use("/api/auth", authRoutes);
 app.use("/api/plants", plantRoutes);
 app.use("/api/visitors", visitorRoutes);
+app.use("/api/questions", questionRoutes);
+app.use("/api/video", videoRoutes);
+app.use("/api/users", userRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
