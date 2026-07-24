@@ -72,6 +72,17 @@ const visitorSchema = new mongoose.Schema(
       ref: "User",
     },
 
+    // The day this visit is scheduled for — set by the Manager at invite
+    // time, distinct from `registeredAt` (when the invite record itself was
+    // created). Normalized to midnight so date-range queries are exact.
+    // Defaults to "now" so any pre-existing record created before this field
+    // existed still behaves exactly as it did (falls back to its own
+    // creation date rather than failing validation).
+    visitDate: {
+      type: Date,
+      default: Date.now,
+    },
+
     // Single status drives the whole journey. Manager's registerVisitor
     // creates records already at INVITED — Security does NOT see these until
     // the visitor has completed induction and a pass has been generated.

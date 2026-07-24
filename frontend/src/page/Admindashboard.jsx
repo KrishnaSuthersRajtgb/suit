@@ -83,6 +83,18 @@ const UsersIcon = () => (
   </svg>
 );
 
+const ChevronLeftIcon = () => (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+    <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
+  </svg>
+);
+
+const ChevronRightIcon = () => (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+    <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+  </svg>
+);
+
 // ── Real backend statuses (see visitorController.js TRANSITIONS) ───────────
 // The Admin gate view only ever receives GATE_RELEVANT_STATUSES from the API
 // by default: PASS_GENERATED, CHECKED_IN, CHECKED_OUT, CLOSED, REJECTED,
@@ -131,12 +143,46 @@ const countFor = (counts, value) => {
   return counts[value] ?? 0;
 };
 
+// Both formatters below pin the timezone to IST explicitly — previously
+// `toLocaleString(undefined, ...)` used whatever timezone the viewer's own
+// browser/OS happened to be set to, so the exact same record could display
+// a different date/time to admins logged in from different locations.
 const fmtTime = (iso) => {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 };
+
+const fmtDate = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium" });
+};
+
+// ── Month navigator helpers ──────────────────────────────────────────────────
+// Extracts a visitor's IST calendar year/month, independent of the viewer's
+// own browser timezone — same reasoning as fmtTime/fmtDate above.
+const getISTYearMonth = (dateVal) => {
+  const d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+  if (Number.isNaN(d.getTime())) return null;
+  // en-CA locale formats as YYYY-MM-DD, easy to split.
+  const [year, month] = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(d)
+    .split("-");
+  return { year: Number(year), month: Number(month) }; // month is 1–12
+};
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
 
 // ── Field lookup ─────────────────────────────────────────────────────────────
 // visitorController.js writes these exact timestamp fields via `transition()`:
@@ -156,6 +202,10 @@ const pickTime = (obj, paths) => {
 const getRequestedTime = (v) => pickTime(v, ["invitedAt", "createdAt", "registeredAt"]);
 const getCheckInTime   = (v) => pickTime(v, ["checkedInAt", "checkInAt", "checkinAt", "checkIn"]);
 const getCheckOutTime  = (v) => pickTime(v, ["checkedOutAt", "checkOutAt", "checkoutAt", "checkOut"]);
+// visitDate is the day the visit is scheduled for (set by the Manager at
+// invite time) — distinct from "Requested" (registeredAt), which is when the
+// invite record itself was created.
+const getVisitDate     = (v) => pickTime(v, ["visitDate"]);
 
 // Turns a row into a safe CSV cell (quotes anything with a comma/quote/newline).
 const csvCell = (val) => {
@@ -968,23 +1018,36 @@ export default function AdminDashboard({ onLogout }) {
   const [plantFilter, setPlantFilter]   = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch]             = useState("");
-  // Single "Actions" button drives a dropdown menu; only one panel — the
-  // one the user picked — is ever open at a time.
-  // activePanel: null | "visitor" | "question" | "video" | "security" | "manager"
+
+  // Month navigator — defaults to the current IST month. Only affects
+  // what's shown/exported here on Admin; Security's own gate queue already
+  // has its own independent "today" scoping on the backend.
+  const [selectedMonth, setSelectedMonth] = useState(() => getISTYearMonth(new Date()));
+  const shiftMonth = (delta) => {
+    setSelectedMonth((prev) => {
+      let { year, month } = prev;
+      month += delta;
+      if (month < 1) { month = 12; year -= 1; }
+      else if (month > 12) { month = 1; year += 1; }
+      return { year, month };
+    });
+  };
+  const goToCurrentMonth = () => setSelectedMonth(getISTYearMonth(new Date()));
+
+  // Four standalone action buttons (styled like colored pill buttons);
+  // only one panel — the one the user picked — is ever open at a time.
+  // activePanel: null | "visitor" | "staff" | "video" | "question"
   const [activePanel, setActivePanel] = useState(null);
-  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
 
   const ACTION_ITEMS = [
-    { key: "visitor",  label: "Invite Visitor", Icon: PlusIcon },
-    { key: "question", label: "Add Question",   Icon: BookIcon },
-    { key: "video",    label: "Add Video",      Icon: VideoIcon },
-    { key: "security", label: "Add Security",   Icon: UsersIcon },
-    { key: "manager",  label: "Add Manager",    Icon: UsersIcon },
+    { key: "visitor",  label: "Invite Visitor",     Icon: PlusIcon,  gradient: "from-sky-500 to-blue-600" },
+    { key: "staff",    label: "Manager / Security", Icon: UsersIcon, gradient: "from-violet-500 to-purple-600" },
+    { key: "video",    label: "Add Video",          Icon: VideoIcon, gradient: "from-emerald-500 to-teal-600" },
+    { key: "question", label: "Add Question",       Icon: BookIcon,  gradient: "from-orange-500 to-amber-600" },
   ];
 
   const selectActionPanel = (key) => {
     setActivePanel((prev) => (prev === key ? null : key));
-    setActionsMenuOpen(false);
   };
 
   const [visitors, setVisitors]         = useState([]);
@@ -1046,15 +1109,27 @@ export default function AdminDashboard({ onLogout }) {
     }
   };
 
+  // Month filter runs client-side (Admin already fetches full history via
+  // includeAll=true) alongside the existing search filter. Falls back to
+  // the "Requested" timestamp only for old records created before the
+  // visitDate field existed.
   const filteredVisitors = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return visitors;
-    return visitors.filter((v) =>
-      [v.name, v.phone, v.company, v.host, v.plant?.plantName]
-        .filter(Boolean)
-        .some((field) => field.toLowerCase().includes(q))
-    );
-  }, [visitors, search]);
+
+    return visitors.filter((v) => {
+      const matchesSearch =
+        !q ||
+        [v.name, v.phone, v.company, v.host, v.plant?.plantName]
+          .filter(Boolean)
+          .some((field) => field.toLowerCase().includes(q));
+      if (!matchesSearch) return false;
+
+      const dateForMonth = getVisitDate(v) || getRequestedTime(v);
+      const ym = dateForMonth ? getISTYearMonth(dateForMonth) : null;
+      if (!ym) return true; // no usable date — don't hide it, just can't bucket it
+      return ym.year === selectedMonth.year && ym.month === selectedMonth.month;
+    });
+  }, [visitors, search, selectedMonth]);
 
   const handleLogout = () => {
     logoutAdmin();
@@ -1063,9 +1138,10 @@ export default function AdminDashboard({ onLogout }) {
   };
 
   const handleExportCsv = () => {
-    const headers = ["Name", "Phone", "Company", "Host", "Plant", "Purpose", "Status", "Requested At", "Checked In", "Checked Out"];
+    const headers = ["Name", "Phone", "Company", "Host", "Plant", "Purpose", "Visit Date", "Status", "Requested At", "Checked In", "Checked Out"];
     const rows = filteredVisitors.map((v) => [
       v.name, v.phone, v.company, v.host, v.plant?.plantName, v.purpose,
+      fmtDate(getVisitDate(v)),
       STATUS_LABELS[v.status] || v.status,
       fmtTime(getRequestedTime(v)), fmtTime(getCheckInTime(v)), fmtTime(getCheckOutTime(v)),
     ]);
@@ -1074,7 +1150,7 @@ export default function AdminDashboard({ onLogout }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `visitors_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `visitors_${selectedMonth.year}-${String(selectedMonth.month).padStart(2, "0")}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1110,154 +1186,56 @@ export default function AdminDashboard({ onLogout }) {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
-        {/* Stat cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {STAT_CARD_STATUSES.map((status) => (
+        {/* Month navigator — hidden while an action panel is open, it only
+            applies to the visitor list/export below. */}
+        {activePanel === null && (
+          <div className="flex items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => shiftMonth(-1)}
+                className="flex items-center justify-center w-9 h-9 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition"
+                aria-label="Previous month"
+              >
+                <ChevronLeftIcon />
+              </button>
+              <span className="text-white font-semibold text-sm min-w-[140px] text-center">
+                {MONTH_NAMES[selectedMonth.month - 1]} {selectedMonth.year}
+              </span>
+              <button
+                onClick={() => shiftMonth(1)}
+                className="flex items-center justify-center w-9 h-9 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition"
+                aria-label="Next month"
+              >
+                <ChevronRightIcon />
+              </button>
+            </div>
             <button
-              key={status}
-              onClick={() => setStatusFilter(statusFilter === status ? "" : status)}
-              className={`text-left bg-slate-900 border rounded-xl p-4 transition ${
-                statusFilter === status ? "border-purple-500 ring-1 ring-purple-500" : "border-slate-800 hover:border-slate-700"
+              onClick={goToCurrentMonth}
+              className="text-xs text-purple-300 hover:text-purple-200 bg-purple-500/10 hover:bg-purple-500/20 rounded-lg px-3 py-1.5 transition"
+            >
+              This Month
+            </button>
+          </div>
+        )}
+
+        {/* Four standalone action buttons — colored pills. Clicking one opens
+            ONLY that panel below (visitor list/stats/filters are hidden
+            while a panel is open); clicking the same one again closes it
+            and brings the visitor list back. */}
+        <div className="flex flex-wrap gap-3">
+          {ACTION_ITEMS.map(({ key, label, Icon, gradient }) => (
+            <button
+              key={key}
+              onClick={() => selectActionPanel(key)}
+              className={`flex items-center gap-2 bg-gradient-to-r ${gradient} text-white text-sm font-semibold rounded-full pl-5 pr-4 py-2.5 shadow-lg shadow-black/20 transition transform hover:scale-[1.03] hover:brightness-110 ${
+                activePanel === key ? "ring-2 ring-white/80 ring-offset-2 ring-offset-slate-950" : ""
               }`}
             >
-              <p className="text-2xl font-bold text-white">{countFor(counts, status)}</p>
-              <p className="text-xs text-slate-400 mt-1">{STATUS_LABELS[status]}</p>
+              <Icon />
+              {label}
             </button>
           ))}
         </div>
-
-        {/* Filter bar */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col lg:flex-row gap-3 lg:items-center">
-          <div className="relative flex-1">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">
-              <SearchIcon />
-            </span>
-            <input
-              type="text"
-              placeholder="Search name, phone, company, or host…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg pl-9 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
-            />
-          </div>
-
-          <select
-            value={plantFilter}
-            onChange={(e) => setPlantFilter(e.target.value)}
-            className="bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
-          >
-            <option value="">All plants</option>
-            {plants.map((p) => (
-              // Filtering hits `query.plant = plant` server-side, which is
-              // matched directly against the ObjectId field — plantCode
-              // would silently match nothing, so use _id here too.
-              <option key={p._id} value={p._id}>{p.plantName}</option>
-            ))}
-          </select>
-          {plantsError && <p className="text-xs text-red-400">{plantsError}</p>}
-
-          <div className="flex gap-1 bg-slate-800 rounded-lg p-1 flex-wrap">
-            {STATUS_FILTERS.map((f) => (
-              <button
-                key={f.value || "all"}
-                onClick={() => setStatusFilter(f.value)}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition ${
-                  statusFilter === f.value ? "bg-purple-500 text-white shadow" : "text-slate-400 hover:text-white"
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="relative">
-            <button
-              onClick={() => setActionsMenuOpen((s) => !s)}
-              className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-sm font-semibold rounded-lg px-4 py-2.5 transition"
-            >
-              <PlusIcon />
-              Actions
-              <ChevronDownIcon open={actionsMenuOpen} />
-            </button>
-
-            {actionsMenuOpen && (
-              <div className="absolute right-0 lg:left-0 mt-2 w-52 bg-slate-900 border border-slate-700 rounded-lg shadow-xl overflow-hidden z-20">
-                {ACTION_ITEMS.map(({ key, label, Icon }) => (
-                  <button
-                    key={key}
-                    onClick={() => selectActionPanel(key)}
-                    className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-left transition ${
-                      activePanel === key
-                        ? "bg-purple-500/20 text-purple-300"
-                        : "text-slate-300 hover:bg-slate-800 hover:text-white"
-                    }`}
-                  >
-                    <Icon />
-                    {label}
-                    {activePanel === key && <span className="ml-auto text-xs text-purple-300">Open</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <button
-            onClick={handleExportCsv}
-            disabled={filteredVisitors.length === 0}
-            className="flex items-center justify-center gap-1.5 bg-purple-500 hover:bg-purple-400 disabled:bg-purple-900 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg px-4 py-2.5 transition"
-          >
-            <DownloadIcon />
-            Export CSV
-          </button>
-        </div>
-
-        {/* Only the single panel picked from the Actions dropdown renders. */}
-
-        {/* Invite Visitor — same capability Manager has, available right here */}
-        {activePanel === "visitor" && (
-          <ApproveVisitorForm
-            plants={plants}
-            plantsLoading={plants.length === 0 && !plantsError}
-            plantsError={plantsError}
-            onApproved={() => loadVisitors(plantFilter, statusFilter)}
-          />
-        )}
-
-        {/* Add Question — quiz questions only */}
-        {activePanel === "question" && (
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-            <h3 className="text-white font-semibold text-sm">Quiz Questions</h3>
-            <QuestionsTab plants={plants} />
-          </div>
-        )}
-
-        {/* Add Video — induction video only */}
-        {activePanel === "video" && (
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-            <h3 className="text-white font-semibold text-sm">Induction Video</h3>
-            <VideoTab plants={plants} />
-          </div>
-        )}
-
-        {/* Add Security — create Security accounts */}
-        {activePanel === "security" && (
-          <CreateStaffPanel
-            plants={plants}
-            plantsLoading={plants.length === 0 && !plantsError}
-            plantsError={plantsError}
-            fixedRole="SECURITY"
-          />
-        )}
-
-        {/* Add Manager — create Manager accounts */}
-        {activePanel === "manager" && (
-          <CreateStaffPanel
-            plants={plants}
-            plantsLoading={plants.length === 0 && !plantsError}
-            plantsError={plantsError}
-            fixedRole="MANAGER"
-          />
-        )}
 
         {error && (
           <div className="bg-red-950/60 border border-red-800 text-red-300 text-sm rounded-lg px-4 py-3">
@@ -1265,106 +1243,231 @@ export default function AdminDashboard({ onLogout }) {
           </div>
         )}
 
-        {/* Visitor table */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-          {loading ? (
-            <p className="text-slate-500 text-sm text-center py-12">Loading visitors…</p>
-          ) : filteredVisitors.length === 0 ? (
-            <p className="text-slate-500 text-sm text-center py-12">No visitors match this filter.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-500 text-xs uppercase tracking-wide">
-                    <th className="text-left font-medium px-5 py-3">Visitor</th>
-                    <th className="text-left font-medium px-5 py-3">Company / Host</th>
-                    <th className="text-left font-medium px-5 py-3">Plant</th>
-                    <th className="text-left font-medium px-5 py-3">Purpose</th>
-                    <th className="text-left font-medium px-5 py-3">Requested</th>
-                    <th className="text-left font-medium px-5 py-3">Status</th>
-                    <th className="text-left font-medium px-5 py-3">Checked In</th>
-                    <th className="text-left font-medium px-5 py-3">Checked Out</th>
-                    <th className="text-left font-medium px-5 py-3">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/70">
-                  {filteredVisitors.map((v) => {
-                    const busy = actioningId === v._id;
-                    return (
-                      <tr key={v._id} className="hover:bg-slate-800/40 transition">
-                        <td className="px-5 py-3.5">
-                          <p className="text-white font-medium">{v.name}</p>
-                          <p className="text-slate-500 text-xs mt-0.5">{v.phone}</p>
-                        </td>
-                        <td className="px-5 py-3.5 text-slate-300">
-                          <p>{v.company || "—"}</p>
-                          <p className="text-slate-500 text-xs mt-0.5">Host: {v.host}</p>
-                        </td>
-                        <td className="px-5 py-3.5 text-slate-300">{v.plant?.plantName || "—"}</td>
-                        <td className="px-5 py-3.5 text-slate-300">{v.purpose || "—"}</td>
-                        <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getRequestedTime(v))}</td>
-                        <td className="px-5 py-3.5">
-                          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${STATUS_STYLES[v.status] || "bg-slate-800 text-slate-400 border-slate-700"}`}>
-                            {STATUS_LABELS[v.status] || v.status}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getCheckInTime(v))}</td>
-                        <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getCheckOutTime(v))}</td>
-                        <td className="px-5 py-3.5 whitespace-nowrap">
-                          {/* Pass has been issued — visitor can now be checked in at the gate, or rejected */}
-                          {v.status === "PASS_GENERATED" && (
-                            <div className="flex gap-1.5">
-                              <button
-                                disabled={busy}
-                                onClick={() => runAction(v._id, securityCheckIn)}
-                                className="bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-800 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg px-2.5 py-1.5 transition"
-                              >
-                                {busy ? "…" : "Check In"}
-                              </button>
-                              <button
-                                disabled={busy}
-                                onClick={() => runAction(v._id, rejectVisitor)}
-                                className="bg-red-600 hover:bg-red-500 disabled:bg-red-900 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg px-2.5 py-1.5 transition"
-                              >
-                                {busy ? "…" : "Reject"}
-                              </button>
-                            </div>
-                          )}
-                          {v.status === "CHECKED_IN" && (
-                            <button
-                              disabled={busy}
-                              onClick={() => runAction(v._id, securityCheckOut)}
-                              className="bg-slate-600 hover:bg-slate-500 disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg px-2.5 py-1.5 transition"
-                            >
-                              {busy ? "…" : "Check Out"}
-                            </button>
-                          )}
-                          {v.status === "CHECKED_OUT" && (
-                            <button
-                              disabled={busy}
-                              onClick={() => runAction(v._id, closeVisitor)}
-                              className="bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg px-2.5 py-1.5 transition"
-                            >
-                              {busy ? "…" : "Close Visit"}
-                            </button>
-                          )}
-                          {["CLOSED", "REJECTED", "EXPIRED", "CANCELLED"].includes(v.status) && (
-                            <span className="text-slate-600 text-xs">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        {/* When a panel is open, show ONLY that panel's data — everything
+            else (stat cards, filters, visitor table) is hidden. */}
+        {activePanel !== null ? (
+          <div className="space-y-4">
+            <button
+              onClick={() => setActivePanel(null)}
+              className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition"
+            >
+              <ChevronLeftIcon />
+              Back to visitor list
+            </button>
 
-        <p className="text-xs text-slate-600">
-          Showing {filteredVisitors.length} of {visitors.length} visitor{visitors.length === 1 ? "" : "s"}
-          {plantFilter ? "" : " across all plants"}.
-        </p>
+            {/* Invite Visitor — same capability Manager has, available right here */}
+            {activePanel === "visitor" && (
+              <ApproveVisitorForm
+                plants={plants}
+                plantsLoading={plants.length === 0 && !plantsError}
+                plantsError={plantsError}
+                onApproved={() => loadVisitors(plantFilter, statusFilter)}
+              />
+            )}
+
+            {/* Manager / Security — single panel, role picked via dropdown inside */}
+            {activePanel === "staff" && (
+              <CreateStaffPanel
+                plants={plants}
+                plantsLoading={plants.length === 0 && !plantsError}
+                plantsError={plantsError}
+              />
+            )}
+
+            {/* Add Video — induction video only */}
+            {activePanel === "video" && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                <h3 className="text-white font-semibold text-sm">Induction Video</h3>
+                <VideoTab plants={plants} />
+              </div>
+            )}
+
+            {/* Add Question — quiz questions only */}
+            {activePanel === "question" && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                <h3 className="text-white font-semibold text-sm">Quiz Questions</h3>
+                <QuestionsTab plants={plants} />
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Stat cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              {STAT_CARD_STATUSES.map((status) => (
+                <button
+                  key={status}
+                  onClick={() => setStatusFilter(statusFilter === status ? "" : status)}
+                  className={`text-left bg-slate-900 border rounded-xl p-4 transition ${
+                    statusFilter === status ? "border-purple-500 ring-1 ring-purple-500" : "border-slate-800 hover:border-slate-700"
+                  }`}
+                >
+                  <p className="text-2xl font-bold text-white">{countFor(counts, status)}</p>
+                  <p className="text-xs text-slate-400 mt-1">{STATUS_LABELS[status]}</p>
+                </button>
+              ))}
+            </div>
+
+            {/* Filter bar */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col lg:flex-row gap-3 lg:items-center">
+              <div className="relative flex-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">
+                  <SearchIcon />
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search name, phone, company, or host…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg pl-9 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
+                />
+              </div>
+
+              <select
+                value={plantFilter}
+                onChange={(e) => setPlantFilter(e.target.value)}
+                className="bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
+              >
+                <option value="">All plants</option>
+                {plants.map((p) => (
+                  // Filtering hits `query.plant = plant` server-side, which is
+                  // matched directly against the ObjectId field — plantCode
+                  // would silently match nothing, so use _id here too.
+                  <option key={p._id} value={p._id}>{p.plantName}</option>
+                ))}
+              </select>
+              {plantsError && <p className="text-xs text-red-400">{plantsError}</p>}
+
+              <div className="flex gap-1 bg-slate-800 rounded-lg p-1 flex-wrap">
+                {STATUS_FILTERS.map((f) => (
+                  <button
+                    key={f.value || "all"}
+                    onClick={() => setStatusFilter(f.value)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition ${
+                      statusFilter === f.value ? "bg-purple-500 text-white shadow" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={handleExportCsv}
+                disabled={filteredVisitors.length === 0}
+                className="flex items-center justify-center gap-1.5 bg-purple-500 hover:bg-purple-400 disabled:bg-purple-900 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg px-4 py-2.5 transition"
+              >
+                <DownloadIcon />
+                Export CSV
+              </button>
+            </div>
+
+            {/* Visitor table */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+              {loading ? (
+                <p className="text-slate-500 text-sm text-center py-12">Loading visitors…</p>
+              ) : filteredVisitors.length === 0 ? (
+                <p className="text-slate-500 text-sm text-center py-12">
+                  No visitors match this filter in {MONTH_NAMES[selectedMonth.month - 1]} {selectedMonth.year}.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-500 text-xs uppercase tracking-wide">
+                        <th className="text-left font-medium px-5 py-3">Visitor</th>
+                        <th className="text-left font-medium px-5 py-3">Company / Host</th>
+                        <th className="text-left font-medium px-5 py-3">Plant</th>
+                        <th className="text-left font-medium px-5 py-3">Visit Date</th>
+                        <th className="text-left font-medium px-5 py-3">Purpose</th>
+                        <th className="text-left font-medium px-5 py-3">Requested</th>
+                        <th className="text-left font-medium px-5 py-3">Status</th>
+                        <th className="text-left font-medium px-5 py-3">Checked In</th>
+                        <th className="text-left font-medium px-5 py-3">Checked Out</th>
+                        <th className="text-left font-medium px-5 py-3">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/70">
+                      {filteredVisitors.map((v) => {
+                        const busy = actioningId === v._id;
+                        return (
+                          <tr key={v._id} className="hover:bg-slate-800/40 transition">
+                            <td className="px-5 py-3.5">
+                              <p className="text-white font-medium">{v.name}</p>
+                              <p className="text-slate-500 text-xs mt-0.5">{v.phone}</p>
+                            </td>
+                            <td className="px-5 py-3.5 text-slate-300">
+                              <p>{v.company || "—"}</p>
+                              <p className="text-slate-500 text-xs mt-0.5">Host: {v.host}</p>
+                            </td>
+                            <td className="px-5 py-3.5 text-slate-300">{v.plant?.plantName || "—"}</td>
+                            <td className="px-5 py-3.5 text-slate-300 whitespace-nowrap">{fmtDate(getVisitDate(v))}</td>
+                            <td className="px-5 py-3.5 text-slate-300">{v.purpose || "—"}</td>
+                            <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getRequestedTime(v))}</td>
+                            <td className="px-5 py-3.5">
+                              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${STATUS_STYLES[v.status] || "bg-slate-800 text-slate-400 border-slate-700"}`}>
+                                {STATUS_LABELS[v.status] || v.status}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getCheckInTime(v))}</td>
+                            <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getCheckOutTime(v))}</td>
+                            <td className="px-5 py-3.5 whitespace-nowrap">
+                              {/* Pass has been issued — visitor can now be checked in at the gate, or rejected */}
+                              {v.status === "PASS_GENERATED" && (
+                                <div className="flex gap-1.5">
+                                  <button
+                                    disabled={busy}
+                                    onClick={() => runAction(v._id, securityCheckIn)}
+                                    className="bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-800 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg px-2.5 py-1.5 transition"
+                                  >
+                                    {busy ? "…" : "Check In"}
+                                  </button>
+                                  <button
+                                    disabled={busy}
+                                    onClick={() => runAction(v._id, rejectVisitor)}
+                                    className="bg-red-600 hover:bg-red-500 disabled:bg-red-900 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg px-2.5 py-1.5 transition"
+                                  >
+                                    {busy ? "…" : "Reject"}
+                                  </button>
+                                </div>
+                              )}
+                              {v.status === "CHECKED_IN" && (
+                                <button
+                                  disabled={busy}
+                                  onClick={() => runAction(v._id, securityCheckOut)}
+                                  className="bg-slate-600 hover:bg-slate-500 disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg px-2.5 py-1.5 transition"
+                                >
+                                  {busy ? "…" : "Check Out"}
+                                </button>
+                              )}
+                              {v.status === "CHECKED_OUT" && (
+                                <button
+                                  disabled={busy}
+                                  onClick={() => runAction(v._id, closeVisitor)}
+                                  className="bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg px-2.5 py-1.5 transition"
+                                >
+                                  {busy ? "…" : "Close Visit"}
+                                </button>
+                              )}
+                              {["CLOSED", "REJECTED", "EXPIRED", "CANCELLED"].includes(v.status) && (
+                                <span className="text-slate-600 text-xs">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <p className="text-xs text-slate-600">
+              Showing {filteredVisitors.length} of {visitors.length} visitor{visitors.length === 1 ? "" : "s"}
+              {plantFilter ? "" : " across all plants"} · {MONTH_NAMES[selectedMonth.month - 1]} {selectedMonth.year}.
+            </p>
+          </>
+        )}
       </main>
     </div>
   );

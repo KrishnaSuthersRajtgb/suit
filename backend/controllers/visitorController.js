@@ -72,24 +72,48 @@ async function transition(visitor, to, { timestampField, note, extra = {} } = {}
   return visitor;
 }
 
+// Hardcoded IST offset — deterministic regardless of the server's local
+// timezone. Previously this used Date.setHours(), which silently produces
+// wrong "days" if the host process runs in UTC (common on most hosting
+// platforms) instead of IST.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+// Given any UTC instant, returns the UTC instant of IST midnight for that
+// same IST calendar day. Pure arithmetic — never touches the server's
+// local TZ setting.
+function startOfISTDay(date = new Date()) {
+  const shifted = new Date(date.getTime() + IST_OFFSET_MS);
+  shifted.setUTCHours(0, 0, 0, 0);
+  return new Date(shifted.getTime() - IST_OFFSET_MS);
+}
+
 function startOfToday() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  return startOfISTDay(new Date());
+}
+
+// Given a "YYYY-MM-DD" string from the date picker (interpreted as an IST
+// calendar date, since this app is India-only), returns the UTC instant of
+// IST midnight for that date — e.g. "2026-07-29" → 2026-07-28T18:30:00.000Z.
+function istMidnightFromDateString(str) {
+  const [y, m, d] = str.split("-").map(Number);
+  const utcMidnightOfDate = Date.UTC(y, m - 1, d, 0, 0, 0, 0);
+  return new Date(utcMidnightOfDate - IST_OFFSET_MS);
 }
 
 // Statuses that represent an unfinished visit which can go stale — mirrors
 // TRANSITIONS: every one of these already allows a direct move to EXPIRED.
 const EXPIRABLE_STATUSES = ["INVITED", "INDUCTION_STARTED", "VIDEO_COMPLETED", "ASSESSMENT_PASSED", "PASS_GENERATED"];
 
-// Lazily flips any visitor still sitting in an unfinished state from a
-// previous day to EXPIRED. Called on read (listVisitors) rather than via a
-// cron job, so it only touches records someone is actually looking at.
+// Lazily flips any visitor still sitting in an unfinished state whose
+// scheduled visitDate has already passed to EXPIRED. Called on read
+// (listVisitors) rather than via a cron job, so it only touches records
+// someone is actually looking at.
 async function expireStaleVisitors(visitors) {
   const today = startOfToday();
   for (const v of visitors) {
     if (!EXPIRABLE_STATUSES.includes(v.status)) continue;
-    if (v.registeredAt && v.registeredAt >= today) continue; // still today — not stale
+    const scheduled = v.visitDate ? startOfISTDay(v.visitDate) : startOfISTDay(v.registeredAt);
+    if (scheduled >= today) continue; // today or in the future — not stale
     try {
       await transition(v, "EXPIRED", { timestampField: "expiredAt" });
     } catch {
@@ -102,7 +126,7 @@ async function expireStaleVisitors(visitors) {
 // ── Manager tab — invite/approve a visitor ──────────────────────────────────
 exports.registerVisitor = async (req, res) => {
   try {
-    const { name, phone, company, purpose, host, plant } = req.body;
+    const { name, phone, company, purpose, host, plant, visitDate } = req.body;
 
     if (!name || !phone || !purpose || !host || !plant) {
       return res.status(400).json({ message: "Missing required fields." });
@@ -120,6 +144,17 @@ exports.registerVisitor = async (req, res) => {
       return res.status(400).json({ message: `Unknown plant: "${plant}". Please select a valid plant.` });
     }
 
+    // Manager can schedule a visit for today or a future date. Defaults to
+    // today when omitted, so any existing frontend that doesn't send this
+    // field keeps working exactly as before.
+    let scheduledDate = startOfToday();
+if (visitDate) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(visitDate)) {
+    return res.status(400).json({ message: "Invalid visit date." });
+  }
+  scheduledDate = istMidnightFromDateString(visitDate);
+}
+
     const visitor = await Visitor.create({
       name,
       phone: phone.replace(/\D/g, ""),
@@ -127,6 +162,7 @@ exports.registerVisitor = async (req, res) => {
       purpose,
       host,
       plant: plantDoc._id,
+      visitDate: scheduledDate,
       registeredBy: req.user?._id,
       status: "INVITED",
       invitedAt: new Date(),
@@ -134,9 +170,9 @@ exports.registerVisitor = async (req, res) => {
     });
 
     res.status(201).json({
-      message: `${name} has been invited. They'll appear at the gate once induction and their pass are complete.`,
-      visitor,
-    });
+  message: `${name} has been invited for ${scheduledDate.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" })}. They'll appear at the gate once induction and their pass are complete.`,
+  visitor,
+});
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -271,8 +307,9 @@ exports.issuePass = async (req, res) => {
 
 // ── Security tab — list visitors ────────────────────────────────────────────
 // Default: only gate-relevant statuses (pass generated onward), scoped to
-// today — mirrors the old "today's approvals only" behaviour so a stale pass
-// from yesterday doesn't linger in the queue.
+// visitors whose visitDate is TODAY specifically — a visitor invited today
+// for tomorrow should not show up at the gate until tomorrow, and one
+// invited last week for today should still show up.
 // Pass ?includePipeline=true to additionally see pre-gate visitors
 // (Invited / Induction Started / etc.) — read-only, informational only.
 // Pass ?includeAll=true (Admin dashboard) to see every status across every
@@ -294,16 +331,16 @@ exports.listVisitors = async (req, res) => {
       query.status = { $in: GATE_RELEVANT_STATUSES };
     }
 
-    // Scope active (non-terminal) records to today — this exists for
-    // Security's gate queue so a stale pass from yesterday doesn't linger
-    // there. Admin (includeAll=true) is exempt: it needs full history,
-    // not just today's records.
+    // Scope Security's default (non-includeAll) view to visitors scheduled
+    // for exactly today (visitDate), regardless of status — this replaces
+    // the previous registeredAt-based scoping now that a visit can be
+    // invited today for a future date. Admin (includeAll=true) is exempt:
+    // it needs full history, not just today's records.
     if (includeAll !== "true") {
-      const ACTIVE_STATUSES = ["PASS_GENERATED", "CHECKED_IN", "INVITED", "INDUCTION_STARTED", "VIDEO_COMPLETED", "ASSESSMENT_PASSED"];
-      query.$or = [
-        { status: { $nin: ACTIVE_STATUSES } },
-        { registeredAt: { $gte: startOfToday() } },
-      ];
+      const today = startOfToday();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      query.visitDate = { $gte: today, $lt: tomorrow };
     }
 
     const visitors = await Visitor.find(query)
