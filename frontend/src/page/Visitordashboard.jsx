@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { getActiveVideo } from "../services/api";
 
 const ShieldIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" className="w-7 h-7" stroke="currentColor" strokeWidth={1.8}>
@@ -8,11 +9,68 @@ const ShieldIcon = () => (
   </svg>
 );
 
-// ── Safety Video Modal ─────────────────────────────────────────────────────────
-function SafetyVideoModal({ onClose, onComplete }) {
-  const [watched, setWatched] = useState(false);
+// ── Video URL helpers ─────────────────────────────────────────────────────────
+// Mirrors the logic in SafetyAssessment.jsx exactly, so both pages treat the
+// Admin-managed induction video identically.
+const isYouTubeUrl = (url) => /youtu\.?be/i.test(url || "");
 
-  const videoSrc = "https://www.youtube.com/embed/s6eLtooKBXk";
+const getYouTubeEmbedUrl = (url) => {
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("youtu.be")) {
+      return `https://www.youtube.com/embed/${u.pathname.slice(1)}`;
+    }
+    const id = u.searchParams.get("v");
+    return id ? `https://www.youtube.com/embed/${id}` : url;
+  } catch {
+    return url;
+  }
+};
+
+// Resolves a video URL against the backend's origin when it's a relative
+// path (i.e. an uploaded file, served at /uploads/videos/... from the
+// backend) — YouTube/external links are already absolute and pass through
+// unchanged. Without this, uploaded videos 404 because the browser
+// resolves a relative src against the frontend's own origin instead.
+const API_ORIGIN = (import.meta.env.VITE_API_URL || "/api").replace(/\/api\/?$/, "");
+const resolveVideoUrl = (url) => {
+  if (!url) return url;
+  if (/^https?:\/\//i.test(url)) return url; // already absolute
+  return `${API_ORIGIN}${url.startsWith("/") ? "" : "/"}${url}`;
+};
+
+// ── Safety Video Modal ─────────────────────────────────────────────────────────
+function SafetyVideoModal({ plantId, onClose, onComplete }) {
+  const [watched, setWatched] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [video, setVideo] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setLoadError("");
+      try {
+        const data = await getActiveVideo(plantId);
+        if (!cancelled) setVideo(data);
+      } catch (err) {
+        if (!cancelled) setLoadError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [plantId]);
+
+  const rawUrl = video?.url || null;
+  const url = rawUrl ? resolveVideoUrl(rawUrl) : null;
+  const embedUrl = url && isYouTubeUrl(url) ? getYouTubeEmbedUrl(url) : null;
+
+  // No video configured at all — don't block the visitor indefinitely.
+  const noVideoConfigured = !loading && !loadError && !url;
 
   return (
     <div
@@ -30,7 +88,9 @@ function SafetyVideoModal({ onClose, onComplete }) {
               </svg>
             </div>
             <div>
-              <h3 className="text-white font-semibold text-sm">Site Safety Induction Video</h3>
+              <h3 className="text-white font-semibold text-sm">
+                {video?.title || "Site Safety Induction Video"}
+              </h3>
               <p className="text-slate-400 text-xs">Mandatory — watch before entering the site</p>
             </div>
           </div>
@@ -47,33 +107,51 @@ function SafetyVideoModal({ onClose, onComplete }) {
 
         {/* Video */}
         <div
-          className="relative bg-black overflow-hidden"
+          className="relative bg-black overflow-hidden flex items-center justify-center"
           style={{ aspectRatio: "16/9" }}
           onWheel={(e) => e.stopPropagation()}
         >
-          <iframe
-            src={videoSrc}
-            title="Site Safety Induction"
-            allow="autoplay; fullscreen"
-            allowFullScreen
-            className="absolute inset-0 w-full h-full"
-            style={{ border: "none" }}
-            onLoad={() => {
-              setTimeout(() => setWatched(true), 5000);
-            }}
-          />
+          {loading ? (
+            <p className="text-slate-500 text-sm">Loading induction video…</p>
+          ) : loadError ? (
+            <p className="text-red-400 text-sm px-6 text-center">Couldn't load the induction video ({loadError}).</p>
+          ) : noVideoConfigured ? (
+            <p className="text-slate-500 text-sm px-6 text-center">No induction video is configured yet.</p>
+          ) : embedUrl ? (
+            <iframe
+              src={embedUrl}
+              title="Site Safety Induction"
+              allow="autoplay; fullscreen"
+              allowFullScreen
+              className="absolute inset-0 w-full h-full"
+              style={{ border: "none" }}
+              onLoad={() => {
+                setTimeout(() => setWatched(true), 5000);
+              }}
+            />
+          ) : (
+            <video
+              src={url}
+              controls
+              autoPlay
+              className="absolute inset-0 w-full h-full"
+              onEnded={() => setWatched(true)}
+            />
+          )}
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-4 border-t border-slate-700 bg-slate-900/80">
           <p className="text-slate-500 text-xs">
-            {watched
+            {noVideoConfigured
+              ? "✅ You may proceed to the assessment."
+              : watched
               ? "✅ You may now proceed to the assessment."
               : "⏳ Please watch the full video before proceeding."}
           </p>
           <button
             onClick={onComplete}
-            disabled={!watched}
+            disabled={!watched && !noVideoConfigured}
             className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 disabled:cursor-not-allowed text-white disabled:text-slate-500 text-sm font-semibold transition"
           >
             Confirm & Proceed
@@ -113,6 +191,8 @@ export default function VisitorDashboard({ visitor, inducted, onSignOut }) {
     host: "—",
   };
 
+  const plantId = v?.plant?._id || v?.plant;
+
   // Use the real check-in/registration timestamp from the backend rather than "now".
   const checkInMoment = new Date(v.checkedInAt || v.registeredAt || Date.now());
   const checkInTime = checkInMoment.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
@@ -127,6 +207,7 @@ export default function VisitorDashboard({ visitor, inducted, onSignOut }) {
     <div className="min-h-screen bg-slate-950 text-white">
       {showVideo && (
         <SafetyVideoModal
+          plantId={plantId}
           onClose={() => setShowVideo(false)}
           onComplete={() => {
             setShowVideo(false);

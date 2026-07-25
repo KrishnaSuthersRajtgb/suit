@@ -33,6 +33,18 @@ const getYouTubeEmbedUrl = (url) => {
   }
 };
 
+// Resolves a video URL against the backend's origin when it's a relative
+// path (i.e. an uploaded file, served at /uploads/videos/... from the
+// backend) — YouTube/external links are already absolute and pass through
+// unchanged. Without this, uploaded videos 404 because the browser
+// resolves a relative src against the frontend's own origin instead.
+const API_ORIGIN = (import.meta.env.VITE_API_URL || "/api").replace(/\/api\/?$/, "");
+const resolveVideoUrl = (url) => {
+  if (!url) return url;
+  if (/^https?:\/\//i.test(url)) return url; // already absolute
+  return `${API_ORIGIN}${url.startsWith("/") ? "" : "/"}${url}`;
+};
+
 function OptionButton({ label, text, selected, revealed, isCorrect, onClick }) {
   let base = "w-full flex items-center gap-4 px-5 py-4 rounded-xl border text-left transition-all duration-200 ";
 
@@ -79,7 +91,7 @@ function OptionButton({ label, text, selected, revealed, isCorrect, onClick }) {
 
 // ── Video Step — shown before the quiz, if an induction video is configured ──
 function VideoStep({ video, onContinue, submitting }) {
-  const url = video?.url;
+  const url = video?.url ? resolveVideoUrl(video.url) : null;
   const embedUrl = url && isYouTubeUrl(url) ? getYouTubeEmbedUrl(url) : null;
 
   return (

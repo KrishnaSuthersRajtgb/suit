@@ -95,12 +95,13 @@ const ChevronRightIcon = () => (
   </svg>
 );
 
+const CalendarIcon = () => (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+    <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm10 6H4v8h12V8z" clipRule="evenodd" />
+  </svg>
+);
+
 // ── Real backend statuses (see visitorController.js TRANSITIONS) ───────────
-// The Admin gate view only ever receives GATE_RELEVANT_STATUSES from the API
-// by default: PASS_GENERATED, CHECKED_IN, CHECKED_OUT, CLOSED, REJECTED,
-// EXPIRED, CANCELLED. "Awaiting" here means "pass issued, not yet at the
-// gate" — i.e. PASS_GENERATED — not a status called "APPROVED" (that status
-// doesn't exist in the backend and previously caused Check-In to never show).
 const STATUS_STYLES = {
   PASS_GENERATED: "bg-amber-500/20 text-amber-300 border-amber-700/50",
   CHECKED_IN:      "bg-emerald-500/20 text-emerald-300 border-emerald-700/50",
@@ -135,13 +136,11 @@ const STATUS_FILTERS = [
 // (minus "All") if you add/remove a status card.
 const STAT_CARD_STATUSES = ["PASS_GENERATED", "CHECKED_IN", "CHECKED_OUT", "REJECTED"];
 
-const countFor = (counts, value) => {
-  if (!counts) return 0;
-  if (!value) {
-    return Object.values(counts).reduce((sum, n) => sum + (n || 0), 0);
-  }
-  return counts[value] ?? 0;
-};
+// Counts a status directly from a (already month/search-scoped) visitor
+// array — replaces the old backend-`counts`-based countFor, since the
+// backend's counts were never actually scoped to the selected month.
+const countForStatus = (visitorsList, status) =>
+  visitorsList.filter((v) => v.status === status).length;
 
 // Both formatters below pin the timezone to IST explicitly — previously
 // `toLocaleString(undefined, ...)` used whatever timezone the viewer's own
@@ -159,6 +158,15 @@ const fmtDate = (iso) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium" });
+};
+
+// Local YYYY-MM-DD for the date input's default value/min — avoids the UTC
+// off-by-one day that toISOString() can introduce near midnight. Matches
+// ManagerDashboard.jsx's InviteVisitorForm exactly.
+const todayLocalISO = () => {
+  const d = new Date();
+  const offset = d.getTimezoneOffset();
+  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
 };
 
 // ── Month navigator helpers ──────────────────────────────────────────────────
@@ -185,12 +193,6 @@ const MONTH_NAMES = [
 ];
 
 // ── Field lookup ─────────────────────────────────────────────────────────────
-// visitorController.js writes these exact timestamp fields via `transition()`:
-//   invitedAt, inductionStartedAt, videoCompletedAt, assessmentPassedAt,
-//   failedAssessmentAt, passGeneratedAt, checkedInAt, checkedOutAt,
-//   closedAt, rejectedAt, cancelledAt.
-// Kept a couple of common alternate spellings as a fallback in case the
-// schema field names differ slightly on your end.
 const pickTime = (obj, paths) => {
   for (const path of paths) {
     const val = path.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), obj);
@@ -202,9 +204,6 @@ const pickTime = (obj, paths) => {
 const getRequestedTime = (v) => pickTime(v, ["invitedAt", "createdAt", "registeredAt"]);
 const getCheckInTime   = (v) => pickTime(v, ["checkedInAt", "checkInAt", "checkinAt", "checkIn"]);
 const getCheckOutTime  = (v) => pickTime(v, ["checkedOutAt", "checkOutAt", "checkoutAt", "checkOut"]);
-// visitDate is the day the visit is scheduled for (set by the Manager at
-// invite time) — distinct from "Requested" (registeredAt), which is when the
-// invite record itself was created.
 const getVisitDate     = (v) => pickTime(v, ["visitDate"]);
 
 // Turns a row into a safe CSV cell (quotes anything with a comma/quote/newline).
@@ -233,18 +232,18 @@ const plantNameFor = (plants, plantRefOrId) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ── Approve Visitor (inline, collapsible) ────────────────────────────────────
-// Same capability the Manager has — Admin can register a visitor directly.
 // ─────────────────────────────────────────────────────────────────────────────
 function ApproveVisitorForm({ plants, plantsLoading, plantsError, onApproved }) {
-  const [name, setName]       = useState("");
-  const [phone, setPhone]     = useState("");
-  const [company, setCompany] = useState("");
-  const [purpose, setPurpose] = useState("");
-  const [host, setHost]       = useState("");
-  const [plant, setPlant]     = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState("");
-  const [success, setSuccess] = useState("");
+  const [name, setName]           = useState("");
+  const [phone, setPhone]         = useState("");
+  const [company, setCompany]     = useState("");
+  const [purpose, setPurpose]     = useState("");
+  const [host, setHost]           = useState("");
+  const [plant, setPlant]         = useState("");
+  const [visitDate, setVisitDate] = useState(todayLocalISO());
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState("");
+  const [success, setSuccess]     = useState("");
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -256,15 +255,17 @@ function ApproveVisitorForm({ plants, plantsLoading, plantsError, onApproved }) 
     if (!plant)          { setError("Plant is required."); return; }
     if (!purpose.trim()) { setError("Purpose of visit is required."); return; }
     if (!host.trim())    { setError("Host employee name is required."); return; }
+    if (!visitDate)      { setError("Visit date is required."); return; }
 
     setLoading(true);
     try {
       const data = await registerVisitor({
         name: name.trim(), phone: phone.trim(), company: company.trim(),
-        purpose, host: host.trim(), plant,
+        purpose, host: host.trim(), plant, visitDate,
       });
       setSuccess(data.message || "Visitor invited.");
       setName(""); setPhone(""); setCompany(""); setPurpose(""); setHost(""); setPlant("");
+      setVisitDate(todayLocalISO());
       onApproved?.();
     } catch (err) {
       setError(err.message);
@@ -310,13 +311,26 @@ function ApproveVisitorForm({ plants, plantsLoading, plantsError, onApproved }) 
           >
             <option value="">{plantsLoading ? "Loading…" : "Select plant…"}</option>
             {plants.map((p) => (
-              // Send the real Mongo _id — this is what the Visitor schema's
-              // `plant` ref field expects. Sending plantCode here caused a
-              // "Cast to ObjectId failed" 500 error.
               <option key={p._id} value={p._id}>{p.plantName}</option>
             ))}
           </select>
         </div>
+        <div>
+          <label className={labelCls}>
+            <span className="inline-flex items-center gap-1.5"><CalendarIcon /> Visit Date</span>{" "}
+            <span className="text-red-400">*</span>
+          </label>
+          <input
+            type="date"
+            value={visitDate}
+            min={todayLocalISO()}
+            onChange={(e) => setVisitDate(e.target.value)}
+            className={`${inputCls} [color-scheme:dark]`}
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelCls}>Company / Organisation</label>
           <input
@@ -325,9 +339,6 @@ function ApproveVisitorForm({ plants, plantsLoading, plantsError, onApproved }) 
             className={inputCls}
           />
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelCls}>
             Host Employee Name <span className="text-red-400">*</span>
@@ -338,23 +349,24 @@ function ApproveVisitorForm({ plants, plantsLoading, plantsError, onApproved }) 
             className={inputCls}
           />
         </div>
-        <div>
-          <label className={labelCls}>
-            Purpose of Visit <span className="text-red-400">*</span>
-          </label>
-          <select
-            value={purpose} onChange={(e) => setPurpose(e.target.value)}
-            className={inputCls}
-          >
-            <option value="">Select purpose…</option>
-            <option value="Safety Audit">Safety Audit</option>
-            <option value="Site Inspection">Site Inspection</option>
-            <option value="Contractor Work">Contractor Work</option>
-            <option value="Delivery">Delivery</option>
-            <option value="Meeting">Meeting</option>
-            <option value="Other">Other</option>
-          </select>
-        </div>
+      </div>
+
+      <div>
+        <label className={labelCls}>
+          Purpose of Visit <span className="text-red-400">*</span>
+        </label>
+        <select
+          value={purpose} onChange={(e) => setPurpose(e.target.value)}
+          className={inputCls}
+        >
+          <option value="">Select purpose…</option>
+          <option value="Safety Audit">Safety Audit</option>
+          <option value="Site Inspection">Site Inspection</option>
+          <option value="Contractor Work">Contractor Work</option>
+          <option value="Delivery">Delivery</option>
+          <option value="Meeting">Meeting</option>
+          <option value="Other">Other</option>
+        </select>
       </div>
 
       {error && <ErrorBox>{error}</ErrorBox>}
@@ -623,8 +635,10 @@ function VideoTab({ plants }) {
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState("");
 
+  const [mode, setMode]       = useState("link");
   const [title, setTitle]     = useState("");
   const [url, setUrl]         = useState("");
+  const [file, setFile]       = useState(null);
   const [plant, setPlant]     = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError]   = useState("");
@@ -648,18 +662,43 @@ function VideoTab({ plants }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleModeChange = (next) => {
+    setMode(next);
+    setFormError("");
+    if (next === "link") setFile(null);
+    else setUrl("");
+  };
+
+  const handleFileChange = (e) => {
+    const f = e.target.files?.[0] || null;
+    if (f && f.size > 200 * 1024 * 1024) {
+      setFormError("File is too large — max 200MB.");
+      setFile(null);
+      e.target.value = "";
+      return;
+    }
+    setFormError("");
+    setFile(f);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFormError("");
     setSuccess("");
 
-    if (!url.trim()) { setFormError("Video URL is required."); return; }
+    if (mode === "link" && !url.trim()) { setFormError("Video URL is required."); return; }
+    if (mode === "upload" && !file)      { setFormError("Please choose a video file to upload."); return; }
 
     setSubmitting(true);
     try {
-      await createVideo({ title: title.trim(), url: url.trim(), plant: plant || null });
+      await createVideo({
+        title: title.trim(),
+        plant: plant || null,
+        url: mode === "link" ? url.trim() : undefined,
+        file: mode === "upload" ? file : undefined,
+      });
       setSuccess("Saved — this is now the active induction video for that scope.");
-      setTitle(""); setUrl(""); setPlant("");
+      setTitle(""); setUrl(""); setFile(null); setPlant("");
       load();
     } catch (err) {
       setFormError(err.message);
@@ -691,16 +730,58 @@ function VideoTab({ plants }) {
           </div>
         </div>
 
-        <div>
-          <label className={labelCls}>
-            Video URL <span className="text-red-400">*</span>
-          </label>
-          <input
-            type="text" value={url} onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://... .mp4, or a YouTube link"
-            className={inputCls}
-          />
+        {/* Link vs. Upload toggle */}
+        <div className="flex gap-1 bg-slate-800 rounded-lg p-1 w-fit">
+          <button
+            type="button"
+            onClick={() => handleModeChange("link")}
+            className={`px-4 py-1.5 rounded-md text-xs font-medium transition ${
+              mode === "link" ? "bg-purple-500 text-white shadow" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            Video Link
+          </button>
+          <button
+            type="button"
+            onClick={() => handleModeChange("upload")}
+            className={`px-4 py-1.5 rounded-md text-xs font-medium transition ${
+              mode === "upload" ? "bg-purple-500 text-white shadow" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            Upload File
+          </button>
         </div>
+
+        {mode === "link" ? (
+          <div>
+            <label className={labelCls}>
+              Video URL <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="text" value={url} onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://... .mp4, or a YouTube link"
+              className={inputCls}
+            />
+          </div>
+        ) : (
+          <div>
+            <label className={labelCls}>
+              Video File <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="file"
+              accept="video/mp4,video/webm,video/ogg,video/quicktime"
+              onChange={handleFileChange}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-300 rounded-lg px-4 py-2.5 text-sm file:mr-4 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-purple-500 file:text-white hover:file:bg-purple-400 file:cursor-pointer cursor-pointer transition"
+            />
+            {file && (
+              <p className="text-xs text-slate-500 mt-1.5">
+                {file.name} · {(file.size / (1024 * 1024)).toFixed(1)} MB
+              </p>
+            )}
+            <p className="text-xs text-slate-600 mt-1">MP4, WebM, OGG, or MOV — max 200MB.</p>
+          </div>
+        )}
 
         {formError && <ErrorBox>{formError}</ErrorBox>}
         {success && <SuccessBox>{success}</SuccessBox>}
@@ -709,7 +790,7 @@ function VideoTab({ plants }) {
           type="submit" disabled={submitting}
           className="bg-purple-500 hover:bg-purple-400 disabled:bg-purple-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg px-5 py-2.5 text-sm transition"
         >
-          {submitting ? "Saving…" : "Set Active Video"}
+          {submitting ? (mode === "upload" ? "Uploading…" : "Saving…") : "Set Active Video"}
         </button>
       </form>
 
@@ -748,10 +829,6 @@ function VideoTab({ plants }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ── Create Staff (Security / Manager) ────────────────────────────────────────
-// fixedRole: when provided ("SECURITY" | "MANAGER"), the role dropdown is
-// hidden and the form/list is locked to that role — used so "Add Security"
-// and "Add Manager" can be separate buttons/panels instead of one combined
-// panel with a role switcher.
 // ─────────────────────────────────────────────────────────────────────────────
 function CreateStaffPanel({ plants, plantsLoading, plantsError, fixedRole }) {
   const [staff, setStaff]       = useState([]);
@@ -824,9 +901,6 @@ function CreateStaffPanel({ plants, plantsLoading, plantsError, fixedRole }) {
     }
   };
 
-  // When this panel is locked to one role (fixedRole set), only show that
-  // role's accounts in the table below — keeps "Add Security" and
-  // "Add Manager" as clean, separate views.
   const displayedStaff = fixedRole ? staff.filter((s) => s.role === fixedRole) : staff;
 
   return (
@@ -1019,9 +1093,6 @@ export default function AdminDashboard({ onLogout }) {
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch]             = useState("");
 
-  // Month navigator — defaults to the current IST month. Only affects
-  // what's shown/exported here on Admin; Security's own gate queue already
-  // has its own independent "today" scoping on the backend.
   const [selectedMonth, setSelectedMonth] = useState(() => getISTYearMonth(new Date()));
   const shiftMonth = (delta) => {
     setSelectedMonth((prev) => {
@@ -1034,14 +1105,11 @@ export default function AdminDashboard({ onLogout }) {
   };
   const goToCurrentMonth = () => setSelectedMonth(getISTYearMonth(new Date()));
 
-  // Four standalone action buttons (styled like colored pill buttons);
-  // only one panel — the one the user picked — is ever open at a time.
-  // activePanel: null | "visitor" | "staff" | "video" | "question"
   const [activePanel, setActivePanel] = useState(null);
 
   const ACTION_ITEMS = [
     { key: "visitor",  label: "Invite Visitor",     Icon: PlusIcon,  gradient: "from-sky-500 to-blue-600" },
-    { key: "staff",    label: "Manager / Security", Icon: UsersIcon, gradient: "from-violet-500 to-purple-600" },
+    { key: "staff",    label: "Add User", Icon: UsersIcon, gradient: "from-violet-500 to-purple-600" },
     { key: "video",    label: "Add Video",          Icon: VideoIcon, gradient: "from-emerald-500 to-teal-600" },
     { key: "question", label: "Add Question",       Icon: BookIcon,  gradient: "from-orange-500 to-amber-600" },
   ];
@@ -1051,12 +1119,10 @@ export default function AdminDashboard({ onLogout }) {
   };
 
   const [visitors, setVisitors]         = useState([]);
-  const [counts, setCounts]             = useState(null);
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState("");
   const [actioningId, setActioningId]   = useState(null);
 
-  // Guard the route — no token means no business being here.
   useEffect(() => {
     if (!localStorage.getItem("ehs_token")) {
       navigate("/", { replace: true });
@@ -1069,16 +1135,24 @@ export default function AdminDashboard({ onLogout }) {
       .catch((err) => setPlantsError(err.message));
   }, []);
 
-  const loadVisitors = async (plantId, status) => {
+  const loadVisitors = async (plantId) => {
     setLoading(true);
     setError("");
     try {
       // Admin needs full history, not just today's active-status records —
       // pass includeAll=true so the backend skips its today-only scoping
       // (that scoping still applies for Security's gate queue, unaffected).
-      const data = await listVisitors(plantId || undefined, status || undefined, false, true);
+      //
+      // Status is deliberately NOT sent here — fetch every status for this
+      // plant once, and filter by status/month/search entirely client-side
+      // below. Previously sending status meant the stat-card counts
+      // (data.counts) were computed only from whatever the backend returned,
+      // which — combined with includeAll=true skipping date scoping —
+      // reflected the visitor's ENTIRE history rather than the selected
+      // month, so switching to a month with no visitors still showed stale
+      // counts from other months.
+      const data = await listVisitors(plantId || undefined, undefined, false, true);
       setVisitors(data.visitors);
-      setCounts(data.counts);
     } catch (err) {
       if (err.status === 401 || err.status === 403) {
         logoutAdmin();
@@ -1092,16 +1166,16 @@ export default function AdminDashboard({ onLogout }) {
   };
 
   useEffect(() => {
-    loadVisitors(plantFilter, statusFilter);
+    loadVisitors(plantFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plantFilter, statusFilter]);
+  }, [plantFilter]);
 
   const runAction = async (id, action) => {
     setActioningId(id);
     setError("");
     try {
       await action(id);
-      await loadVisitors(plantFilter, statusFilter);
+      await loadVisitors(plantFilter);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1109,11 +1183,10 @@ export default function AdminDashboard({ onLogout }) {
     }
   };
 
-  // Month filter runs client-side (Admin already fetches full history via
-  // includeAll=true) alongside the existing search filter. Falls back to
-  // the "Requested" timestamp only for old records created before the
-  // visitDate field existed.
-  const filteredVisitors = useMemo(() => {
+  // Scoped by search + month only (NOT status) — feeds the stat cards, so
+  // their counts are always accurate for whichever month is selected,
+  // regardless of which status chip happens to be active.
+  const monthScopedVisitors = useMemo(() => {
     const q = search.trim().toLowerCase();
 
     return visitors.filter((v) => {
@@ -1130,6 +1203,13 @@ export default function AdminDashboard({ onLogout }) {
       return ym.year === selectedMonth.year && ym.month === selectedMonth.month;
     });
   }, [visitors, search, selectedMonth]);
+
+  // Adds the status chip filter on top of the month/search scoping above —
+  // this is what the table and CSV export actually show.
+  const filteredVisitors = useMemo(() => {
+    if (!statusFilter) return monthScopedVisitors;
+    return monthScopedVisitors.filter((v) => v.status === statusFilter);
+  }, [monthScopedVisitors, statusFilter]);
 
   const handleLogout = () => {
     logoutAdmin();
@@ -1186,8 +1266,7 @@ export default function AdminDashboard({ onLogout }) {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
-        {/* Month navigator — hidden while an action panel is open, it only
-            applies to the visitor list/export below. */}
+        {/* Month navigator */}
         {activePanel === null && (
           <div className="flex items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
             <div className="flex items-center gap-2">
@@ -1218,10 +1297,7 @@ export default function AdminDashboard({ onLogout }) {
           </div>
         )}
 
-        {/* Four standalone action buttons — colored pills. Clicking one opens
-            ONLY that panel below (visitor list/stats/filters are hidden
-            while a panel is open); clicking the same one again closes it
-            and brings the visitor list back. */}
+        {/* Four standalone action buttons */}
         <div className="flex flex-wrap gap-3">
           {ACTION_ITEMS.map(({ key, label, Icon, gradient }) => (
             <button
@@ -1243,8 +1319,6 @@ export default function AdminDashboard({ onLogout }) {
           </div>
         )}
 
-        {/* When a panel is open, show ONLY that panel's data — everything
-            else (stat cards, filters, visitor table) is hidden. */}
         {activePanel !== null ? (
           <div className="space-y-4">
             <button
@@ -1255,17 +1329,15 @@ export default function AdminDashboard({ onLogout }) {
               Back to visitor list
             </button>
 
-            {/* Invite Visitor — same capability Manager has, available right here */}
             {activePanel === "visitor" && (
               <ApproveVisitorForm
                 plants={plants}
                 plantsLoading={plants.length === 0 && !plantsError}
                 plantsError={plantsError}
-                onApproved={() => loadVisitors(plantFilter, statusFilter)}
+                onApproved={() => loadVisitors(plantFilter)}
               />
             )}
 
-            {/* Manager / Security — single panel, role picked via dropdown inside */}
             {activePanel === "staff" && (
               <CreateStaffPanel
                 plants={plants}
@@ -1274,7 +1346,6 @@ export default function AdminDashboard({ onLogout }) {
               />
             )}
 
-            {/* Add Video — induction video only */}
             {activePanel === "video" && (
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
                 <h3 className="text-white font-semibold text-sm">Induction Video</h3>
@@ -1282,7 +1353,6 @@ export default function AdminDashboard({ onLogout }) {
               </div>
             )}
 
-            {/* Add Question — quiz questions only */}
             {activePanel === "question" && (
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
                 <h3 className="text-white font-semibold text-sm">Quiz Questions</h3>
@@ -1292,7 +1362,8 @@ export default function AdminDashboard({ onLogout }) {
           </div>
         ) : (
           <>
-            {/* Stat cards */}
+            {/* Stat cards — now computed from monthScopedVisitors, so they
+                accurately reflect the currently selected month. */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               {STAT_CARD_STATUSES.map((status) => (
                 <button
@@ -1302,7 +1373,7 @@ export default function AdminDashboard({ onLogout }) {
                     statusFilter === status ? "border-purple-500 ring-1 ring-purple-500" : "border-slate-800 hover:border-slate-700"
                   }`}
                 >
-                  <p className="text-2xl font-bold text-white">{countFor(counts, status)}</p>
+                  <p className="text-2xl font-bold text-white">{countForStatus(monthScopedVisitors, status)}</p>
                   <p className="text-xs text-slate-400 mt-1">{STATUS_LABELS[status]}</p>
                 </button>
               ))}
@@ -1330,9 +1401,6 @@ export default function AdminDashboard({ onLogout }) {
               >
                 <option value="">All plants</option>
                 {plants.map((p) => (
-                  // Filtering hits `query.plant = plant` server-side, which is
-                  // matched directly against the ObjectId field — plantCode
-                  // would silently match nothing, so use _id here too.
                   <option key={p._id} value={p._id}>{p.plantName}</option>
                 ))}
               </select>
@@ -1412,7 +1480,6 @@ export default function AdminDashboard({ onLogout }) {
                             <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getCheckInTime(v))}</td>
                             <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getCheckOutTime(v))}</td>
                             <td className="px-5 py-3.5 whitespace-nowrap">
-                              {/* Pass has been issued — visitor can now be checked in at the gate, or rejected */}
                               {v.status === "PASS_GENERATED" && (
                                 <div className="flex gap-1.5">
                                   <button

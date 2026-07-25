@@ -8,10 +8,15 @@ async function request(path, options = {}) {
   // never sets "ehs_token", so this is a no-op for that flow.
   const token = localStorage.getItem("ehs_token");
 
+  // When the body is FormData (file upload), never set Content-Type
+  // ourselves — the browser needs to set it (with the multipart boundary)
+  // for the request to parse correctly on the server.
+  const isFormData = options.body instanceof FormData;
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
@@ -180,10 +185,23 @@ export const getActiveVideo = (plantId) => {
 // Admin-only — full history of videos, so the panel can show what was active before.
 export const getAllVideos = () => request("/video/all");
 
-// Admin-only — uploading a new URL here deactivates the previous active video
-// in the same scope (global or that plant) automatically on the backend.
-export const createVideo = (payload) =>
-  request("/video", { method: "POST", body: JSON.stringify(payload) });
+// Admin-only — sets a new active video. Pass { title, plant, url } for a
+// link, OR { title, plant, file } for an uploaded video file — exactly one
+// of url/file should be given. A file switches this to a multipart
+// FormData request; a url keeps the original JSON request unchanged.
+export const createVideo = ({ title, plant, url, file } = {}) => {
+  if (file) {
+    const formData = new FormData();
+    formData.append("video", file);
+    if (title) formData.append("title", title);
+    if (plant) formData.append("plant", plant);
+    return request("/video", { method: "POST", body: formData });
+  }
+  return request("/video", {
+    method: "POST",
+    body: JSON.stringify({ title, plant, url }),
+  });
+};
 
 // ── Staff accounts (Admin creates Security/Manager logins) ──────────────────
 export const listStaff = (role, plantId) => {

@@ -56,13 +56,13 @@ const todayLocalISO = () => {
 // sees them — and only on the visit date selected below. See
 // visitorController.js TRANSITIONS for the full pipeline.
 // ─────────────────────────────────────────────────────────────────────────────
-function InviteVisitorForm({ plants, plantsLoading, plantsError }) {
+function InviteVisitorForm({ plants, plantsLoading, plantsError, managerPlant }) {
   const [name, setName]           = useState("");
   const [phone, setPhone]         = useState("");
   const [company, setCompany]     = useState("");
   const [purpose, setPurpose]     = useState("");
   const [host, setHost]           = useState("");
-  const [plant, setPlant]         = useState("");
+  const [plant, setPlant]         = useState(managerPlant || ""); // preloaded from manager profile
   const [visitDate, setVisitDate] = useState(todayLocalISO());
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState("");
@@ -94,8 +94,9 @@ function InviteVisitorForm({ plants, plantsLoading, plantsError }) {
 
       setSuccess(data.message);
 
-      // reset form
-      setName(""); setPhone(""); setCompany(""); setPurpose(""); setHost(""); setPlant("");
+      // reset form — keep the manager's plant prefilled instead of clearing it
+      setName(""); setPhone(""); setCompany(""); setPurpose(""); setHost("");
+      setPlant(managerPlant || "");
       setVisitDate(todayLocalISO());
     } catch (err) {
       setError(err.message);
@@ -359,7 +360,16 @@ export default function ManagerDashboard({ onLogout }) {
                 a pass is generated — only then will Security see them at the gate, on the visit date you select.
               </p>
             </div>
-            <InviteVisitorForm plants={plants} plantsLoading={plantsLoading} plantsError={plantsError} />
+            <InviteVisitorForm
+              plants={plants}
+              plantsLoading={plantsLoading}
+              plantsError={plantsError}
+              managerPlant={
+                typeof manager?.plant === "string"
+                  ? manager.plant
+                  : manager?.plant?.plantCode || manager?.plantCode || ""
+              }
+            />
           </>
         )}
       </main>

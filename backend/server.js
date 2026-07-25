@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const path = require("path");
 const connectDB = require("./config/db");
 const { notFound, errorHandler } = require("./middleware/errorHandler");
 
@@ -33,6 +34,9 @@ app.use(
   })
 );
 app.use(express.json());
+
+// Serves uploaded induction videos at /uploads/videos/<filename>.
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 

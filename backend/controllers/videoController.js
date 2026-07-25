@@ -19,14 +19,23 @@ const getAllVideos = asyncHandler(async (req, res) => {
   res.json(videos);
 });
 
-// POST /api/video — admin sets a new active video. Deactivates any previous
-// active video in the same scope (same plant, or global if plant omitted)
-// so there's only ever one active video per scope.
+// POST /api/video — admin sets a new active video. Accepts EITHER a video
+// URL in the JSON body, OR an uploaded file (multer populates req.file when
+// the request is multipart/form-data — see routes/videoRoutes.js). Exactly
+// one of the two is required. Deactivates any previous active video in the
+// same scope (same plant, or global if plant omitted) so there's only ever
+// one active video per scope.
 const createVideo = asyncHandler(async (req, res) => {
-  const { title, url, plant } = req.body;
+  const { title, plant } = req.body;
+  let { url } = req.body;
+
+  if (req.file) {
+    // Served statically from server.js's express.static("/uploads", ...).
+    url = `/uploads/videos/${req.file.filename}`;
+  }
 
   if (!url || !url.trim()) {
-    throw new ApiError(400, "Video URL is required.");
+    throw new ApiError(400, "Provide a video URL or upload a video file.");
   }
 
   const scope = plant || null;
