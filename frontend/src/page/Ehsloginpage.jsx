@@ -143,6 +143,7 @@ export default function EHSLoginPage({ onVisitorCheckin }) {
 
         <div className="w-full max-w-md">
           <div className="mb-6">
+            <h2 className="text-2xl font-bold text-white">Kerakoll India Private Limited</h2>
             <h2 className="text-2xl font-bold text-white">Welcome</h2>
             <p className="text-slate-400 text-sm mt-1">Enter your phone number to check in for your visit.</p>
           </div>

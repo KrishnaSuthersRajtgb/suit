@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getActiveVideo } from "../services/api";
+import { getActiveVideo, getPlants } from "../services/api";
 
 const ShieldIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" className="w-7 h-7" stroke="currentColor" strokeWidth={1.8}>
@@ -37,6 +37,17 @@ const resolveVideoUrl = (url) => {
   if (!url) return url;
   if (/^https?:\/\//i.test(url)) return url; // already absolute
   return `${API_ORIGIN}${url.startsWith("/") ? "" : "/"}${url}`;
+};
+
+// The Plant schema has no dedicated "organization" field — the company name
+// is embedded at the start of `location` (e.g. "Kerakoll India Pvt. Ltd.
+// Plot No 02-01, 01A & 62, ..."). Mirrors AdminDashboard.jsx /
+// ManagerDashboard.jsx / SecurityDashboard.jsx exactly.
+const extractOrgFromLocation = (location) => {
+  if (!location) return "";
+  const match = location.match(/^(.*?)(?:\s*,?\s*Plot\b|\s+\d)/i);
+  const org = match ? match[1] : "";
+  return org.replace(/[,\s]+$/, "").trim();
 };
 
 // ── Safety Video Modal ─────────────────────────────────────────────────────────
@@ -191,7 +202,23 @@ export default function VisitorDashboard({ visitor, inducted, onSignOut }) {
     host: "—",
   };
 
-  const plantId = v?.plant?._id || v?.plant;
+const plantId = v?.plant?._id || v?.plant;
+
+  // v.plant often comes back as a raw id string rather than populated —
+  // fetch the plants list once and look it up, same pattern as
+  // ManagerDashboard.jsx / SecurityDashboard.jsx.
+  const [plants, setPlants] = useState([]);
+  useEffect(() => {
+    getPlants()
+      .then(setPlants)
+      .catch(() => {}); // ribbon detail is optional — fail silently
+  }, []);
+
+  const plantInfo =
+    v?.plant && typeof v.plant === "object"
+      ? v.plant
+      : plants.find((p) => p._id === plantId) || null;
+  const plantOrgName = extractOrgFromLocation(plantInfo?.location);
 
   // Use the real check-in/registration timestamp from the backend rather than "now".
   const checkInMoment = new Date(v.checkedInAt || v.registeredAt || Date.now());
@@ -223,6 +250,18 @@ export default function VisitorDashboard({ visitor, inducted, onSignOut }) {
           <span className="text-lg font-semibold text-white">
             SafeGuard <span className="text-emerald-400">EHS</span>
           </span>
+          {plantInfo && (
+            <>
+              <span className="hidden sm:inline text-slate-600 mx-2">/</span>
+              <span className="hidden sm:inline text-slate-400 text-sm">
+                {plantOrgName && <span className="text-slate-300">{plantOrgName}</span>}
+                {plantOrgName && <span className="text-slate-600 mx-1.5">·</span>}
+                <span className="text-emerald-300 font-medium">{plantInfo.plantCode}</span>
+                <span className="text-slate-600 mx-1.5">·</span>
+                {plantInfo.plantName}
+              </span>
+            </>
+          )}
         </div>
         <button
           onClick={handleSignOut}
@@ -237,27 +276,7 @@ export default function VisitorDashboard({ visitor, inducted, onSignOut }) {
 
       <main className="max-w-2xl mx-auto px-6 py-10">
 
-        {/* Welcome banner */}
-        <div className="bg-gradient-to-r from-blue-900/50 to-slate-800 border border-blue-800/50 rounded-2xl p-6 mb-8 flex items-center gap-4">
-          <div className="w-14 h-14 rounded-full bg-blue-500/20 border border-blue-500/30 flex items-center justify-center text-2xl shrink-0">
-            👤
-          </div>
-          <div>
-            <p className="text-blue-300 text-xs font-semibold uppercase tracking-widest mb-1">Visitor Check-in</p>
-            <h1 className="text-xl font-bold text-white">Welcome, {v.name}!</h1>
-            <p className="text-slate-400 text-sm mt-0.5">
-              Checked in at {checkInTime} · {checkInDate}
-            </p>
-          </div>
-          {inducted && (
-            <div className="ml-auto flex items-center gap-1.5 bg-emerald-500/20 border border-emerald-600/40 rounded-full px-3 py-1.5 text-emerald-400 text-xs font-semibold shrink-0">
-              <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
-                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-              </svg>
-              Inducted
-            </div>
-          )}
-        </div>
+        
 
         {/* Visitor details card */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-6">
@@ -286,6 +305,11 @@ export default function VisitorDashboard({ visitor, inducted, onSignOut }) {
             label="Purpose of Visit"
             value={v.purpose}
             icon={<svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd"/></svg>}
+          />
+          <InfoRow
+            label="Plant"
+            value={plantInfo ? `${plantInfo.plantName} (${plantInfo.plantCode})` : null}
+            icon={<svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path fillRule="evenodd" d="M4 2a1 1 0 00-1 1v15a1 1 0 001 1h4v-3a1 1 0 011-1h2a1 1 0 011 1v3h4a1 1 0 001-1V3a1 1 0 00-1-1H4zm2 3a1 1 0 011-1h1a1 1 0 010 2H7a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2h-1zM6 9a1 1 0 011-1h1a1 1 0 010 2H7a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2h-1zM6 13a1 1 0 011-1h1a1 1 0 110 2H7a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2h-1z" clipRule="evenodd"/></svg>}
           />
         </div>
 
