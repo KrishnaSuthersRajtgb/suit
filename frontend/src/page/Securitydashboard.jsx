@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   getPlants,
@@ -34,6 +34,13 @@ const EyeIcon = () => (
   <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
     <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
     <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+  </svg>
+);
+
+// Attribution icon — mirrors AdminDashboard.jsx / ManagerDashboard.jsx.
+const UserIcon = () => (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
+    <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
   </svg>
 );
 
@@ -87,6 +94,29 @@ const countFor = (counts, value, statuses) => {
   return counts[value] ?? 0;
 };
 
+// registeredBy may come back populated (e.g. { _id, username }) or as a raw
+// ObjectId string, depending on whether the backend .populate()s it — handle
+// both. Mirrors AdminDashboard.jsx / ManagerDashboard.jsx exactly.
+const getRegisteredBy = (v) => {
+  const rb = v.registeredBy;
+  if (!rb) return "—";
+  if (typeof rb === "string") return rb;
+  return rb.username || rb.name || rb._id || "—";
+};
+
+// The Plant schema has no dedicated "organization" field — the company name
+// is embedded at the start of `location` (e.g. "Kerakoll India Pvt. Ltd.
+// Plot No 02-01, 01A & 62, ..."). Heuristic: cut right before "Plot" or the
+// first digit (start of the plot/door number), whichever comes first.
+// Fragile if a location string is formatted differently — falls back to ""
+// rather than showing garbled text. Mirrors AdminDashboard.jsx / ManagerDashboard.jsx exactly.
+const extractOrgFromLocation = (location) => {
+  if (!location) return "";
+  const match = location.match(/^(.*?)(?:\s*,?\s*Plot\b|\s+\d)/i);
+  const org = match ? match[1] : "";
+  return org.replace(/[,\s]+$/, "").trim();
+};
+
 export default function SecurityDashboard({ onLogout }) {
   const navigate = useNavigate();
 
@@ -102,7 +132,42 @@ export default function SecurityDashboard({ onLogout }) {
   const [plantsLoading, setPlantsLoading] = useState(true);
   const [plantsError, setPlantsError]     = useState("");
 
-  const [plantFilter, setPlantFilter]   = useState("");
+  // Security is locked to their own plant — no dropdown, no cross-plant
+  // visibility. Mirrors how ManagerDashboard.jsx resolves managerPlantId.
+  const guardPlantCode =
+    typeof guard?.plant === "string"
+      ? guard.plant
+      : guard?.plant?.plantCode || guard?.plantCode || "";
+
+  const guardPlantId = useMemo(() => {
+    if (guard?.plant && typeof guard.plant === "object" && guard.plant._id) {
+      return guard.plant._id;
+    }
+    if (!guardPlantCode) return "";
+    return plants.find((p) => p.plantCode === guardPlantCode)?._id || "";
+  }, [guard, guardPlantCode, plants]);
+
+  const guardPlantLabel = useMemo(() => {
+    if (guard?.plant && typeof guard.plant === "object") {
+      return `${guard.plant.plantName || "—"}${guard.plant.location ? ` — ${guard.plant.location}` : ""}`;
+    }
+    const match = plants.find((p) => p.plantCode === guardPlantCode || p._id === guardPlantId);
+    return match ? `${match.plantName}${match.location ? ` — ${match.location}` : ""}` : (guardPlantCode || "—");
+  }, [guard, guardPlantCode, guardPlantId, plants]);
+
+  // Full plant record (organization, plantCode, plantName) for the header
+  // ribbon — prefer an already-populated guard.plant object, fall back to
+  // matching it out of the loaded plants list. Mirrors ManagerDashboard.jsx.
+  const guardPlantInfo = useMemo(() => {
+    if (guard?.plant && typeof guard.plant === "object" && guard.plant.plantCode) {
+      return guard.plant;
+    }
+    if (!guardPlantCode) return null;
+    return plants.find((p) => p.plantCode === guardPlantCode) || null;
+  }, [guard, guardPlantCode, plants]);
+
+  const guardOrgName = extractOrgFromLocation(guardPlantInfo?.location);
+
   const [statusFilter, setStatusFilter] = useState("");
   // Off by default — a Manager's invite does NOT show up here until this is
   // switched on. Even then, pre-gate visitors are shown read-only.
@@ -148,9 +213,13 @@ export default function SecurityDashboard({ onLogout }) {
   };
 
   useEffect(() => {
-    loadVisitors(plantFilter, statusFilter, showPipeline);
+    // Wait for plants to finish loading so guardPlantId has a chance to
+    // resolve — firing early risks sending no filter (showing every
+    // plant's visitors) or a stale/unresolved value.
+    if (plantsLoading) return;
+    loadVisitors(guardPlantId, statusFilter, showPipeline);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plantFilter, statusFilter, showPipeline]);
+  }, [plantsLoading, guardPlantId, statusFilter, showPipeline]);
 
   const runAction = async (id, action) => {
     setActioningId(id);
@@ -160,7 +229,7 @@ export default function SecurityDashboard({ onLogout }) {
       // The action may move a visitor out of the currently-filtered status
       // (e.g. Check In while filtered to "Ready") — simplest correct
       // behaviour is to just reload the list + counts.
-      await loadVisitors(plantFilter, statusFilter, showPipeline);
+      await loadVisitors(guardPlantId, statusFilter, showPipeline);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -186,7 +255,17 @@ export default function SecurityDashboard({ onLogout }) {
               SafeGuard <span className="text-amber-400">EHS</span>
             </span>
             <span className="hidden sm:inline text-slate-600 mx-2">/</span>
-            <span className="hidden sm:inline text-slate-400 text-sm">Security</span>
+            {guardPlantInfo ? (
+              <span className="hidden sm:inline text-slate-400 text-sm">
+                {guardOrgName && <span className="text-slate-300">{guardOrgName}</span>}
+                {guardOrgName && <span className="text-slate-600 mx-1.5">·</span>}
+                <span className="text-amber-300 font-medium">{guardPlantInfo.plantCode}</span>
+                <span className="text-slate-600 mx-1.5">·</span>
+                {guardPlantInfo.plantName}
+              </span>
+            ) : (
+              <span className="hidden sm:inline text-slate-400 text-sm">Security</span>
+            )}
           </div>
           <div className="flex items-center gap-4">
             {guard?.username && (
@@ -217,29 +296,16 @@ export default function SecurityDashboard({ onLogout }) {
 
         <p className="text-xs text-slate-500 -mt-1">Active statuses are scoped to today — a new day needs a new invite.</p>
 
+        {/* Plant is fixed to the signed-in guard's own plant — read-only,
+            no selector, and no other plant's visitors are ever fetched. */}
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
             <BuildingIcon />
-            Filter by Plant
+            Plant
           </label>
-          <select
-            value={plantFilter}
-            onChange={(e) => setPlantFilter(e.target.value)}
-            disabled={plantsLoading || !!plantsError}
-            className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            <option value="">
-              {plantsLoading ? "Loading plants…" : plantsError ? "Could not load plants" : "All plants"}
-            </option>
-            {plants.map((p) => (
-              // Send the real Mongo _id — matches what listVisitors()/the backend's
-              // `query.plant = plant` expects. plantCode caused "Cast to ObjectId
-              // failed" 500 errors, same issue already fixed in AdminDashboard.jsx.
-              <option key={p._id} value={p._id}>
-                {p.plantName} — {p.location}
-              </option>
-            ))}
-          </select>
+          <div className="w-full bg-slate-800/60 border border-slate-700 text-slate-300 rounded-lg px-4 py-3 text-sm">
+            {plantsLoading ? "Loading plant…" : plantsError ? "Could not load plant" : guardPlantLabel}
+          </div>
           {plantsError && <p className="text-xs text-red-400 mt-1.5">{plantsError}</p>}
         </div>
 
@@ -300,6 +366,10 @@ export default function SecurityDashboard({ onLogout }) {
                       {v.plant?.plantName && (
                         <p className="text-slate-500 text-xs mt-0.5">{v.plant.plantName}</p>
                       )}
+                      <p className="text-[11px] text-amber-400/80 mt-1 flex items-center gap-1">
+                        <UserIcon />
+                        Created by <span className="font-semibold text-amber-300">{getRegisteredBy(v)}</span>
+                      </p>
                     </div>
                     <span className={`shrink-0 text-xs font-semibold px-2.5 py-1 rounded-full border ${STATUS_STYLES[v.status]}`}>
                       {STATUS_LABELS[v.status]}

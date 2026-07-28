@@ -73,6 +73,67 @@ const loginWithRole = (allowedRole) =>
 
 const loginAdmin = loginWithRole("ADMIN");
 const loginManager = loginWithRole("MANAGER");
-const loginSecurity = loginWithRole("SECURITY");   // add this line
+const loginSecurity = loginWithRole("SECURITY");
 
-module.exports = { loginAdmin, loginManager, loginSecurity };
+// ─────────────────────────────────────────────────────────────────────────────
+// Single unified staff login — looks the user up by username ONLY (no role
+// guessing), reads their real role off their own record, then checks the
+// password once. Used by the single-form StaffLoginPage.jsx instead of it
+// trying loginAdmin/loginManager/loginSecurity in sequence (which produced
+// harmless-but-noisy 401s for the two "wrong door" attempts every time).
+//
+// loginAdmin/loginManager/loginSecurity above are untouched and still work
+// exactly as before — this is purely an additional endpoint.
+// ─────────────────────────────────────────────────────────────────────────────
+const login = asyncHandler(async (req, res, next) => {
+  const { username, password, plant } = req.body;
+
+  if (!username || !password || !plant) {
+    throw new ApiError(400, "Username, password and plant are required.");
+  }
+
+  const plantDoc = await Plant.findOne({ plantCode: plant.toUpperCase() });
+  if (!plantDoc) {
+    throw new ApiError(400, "Selected plant was not found.");
+  }
+
+  const user = await User.findOne({
+    username: username.trim().toLowerCase(),
+  });
+
+  if (!user) {
+    throw new ApiError(401, "Invalid username or password.");
+  }
+
+  if (user.status !== "ACTIVE") {
+    throw new ApiError(403, "This account is not active. Contact your administrator.");
+  }
+
+  if (String(user.plant) !== String(plantDoc._id)) {
+    throw new ApiError(403, "This account is not registered for the selected plant.");
+  }
+
+  const isMatch = await user.comparePassword(password);
+  if (!isMatch) {
+    throw new ApiError(401, "Invalid username or password.");
+  }
+
+  user.lastLoginAt = new Date();
+  await user.save();
+
+  const token = signToken(user);
+
+  res.json({
+    token,
+    user: {
+      id: user._id,
+      username: user.username,
+      fullName: user.fullName,
+      role: user.role,
+      plant: plantDoc.plantCode,
+      plantName: plantDoc.plantName,
+    },
+  });
+});
+
+module.exports = { loginAdmin, loginManager, loginSecurity, login };

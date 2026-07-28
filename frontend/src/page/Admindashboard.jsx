@@ -192,6 +192,43 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
+// ── Today / This Week / Custom Dates helpers — mirrors ManagerDashboard.jsx ──
+const getISTDateISO = (dateVal) => {
+  const d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(d); // "YYYY-MM-DD"
+};
+
+const getISTWeekRange = (dateVal) => {
+  const todayISO = getISTDateISO(dateVal);
+  const [y, m, d] = todayISO.split("-").map(Number);
+  const anchor = new Date(Date.UTC(y, m - 1, d, 12)); // noon UTC avoids DST edge cases
+  const dow = anchor.getUTCDay(); // 0 = Sun … 6 = Sat
+  const monday = new Date(anchor);
+  monday.setUTCDate(anchor.getUTCDate() + (dow === 0 ? -6 : 1 - dow));
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  const toISO = (dt) => dt.toISOString().slice(0, 10);
+  return { start: toISO(monday), end: toISO(sunday) };
+};
+
+// Formats a plain "YYYY-MM-DD" string for display without going through
+// Date parsing (avoids any timezone re-interpretation of a date-only value).
+const fmtDateChip = (isoDate) => {
+  const [y, m, d] = isoDate.split("-");
+  return `${d}/${m}/${y}`;
+};
+
+// Local YYYY-MM-DD for the custom-date input's default value — matches
+// ManagerDashboard.jsx's helper of the same name.
+const todayLocalISOForFilter = () => {
+  const d = new Date();
+  const offset = d.getTimezoneOffset();
+  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
+};
+
 // ── Field lookup ─────────────────────────────────────────────────────────────
 const pickTime = (obj, paths) => {
   for (const path of paths) {
@@ -206,10 +243,33 @@ const getCheckInTime   = (v) => pickTime(v, ["checkedInAt", "checkInAt", "checki
 const getCheckOutTime  = (v) => pickTime(v, ["checkedOutAt", "checkOutAt", "checkoutAt", "checkOut"]);
 const getVisitDate     = (v) => pickTime(v, ["visitDate"]);
 
+// registeredBy may come back populated (e.g. { _id, username }) or as a raw
+// ObjectId string, depending on whether the backend .populate()s it — handle
+// both so the UI doesn't break either way. Mirrors ManagerDashboard.jsx.
+const getRegisteredBy = (v) => {
+  const rb = v.registeredBy;
+  if (!rb) return "—";
+  if (typeof rb === "string") return rb;
+  return rb.username || rb.name || rb._id || "—";
+};
+
 // Turns a row into a safe CSV cell (quotes anything with a comma/quote/newline).
 const csvCell = (val) => {
   const s = String(val ?? "");
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+// The Plant schema has no dedicated "organization" field — the company name
+// is embedded at the start of `location` (e.g. "Kerakoll India Pvt. Ltd.
+// Plot No 02-01, 01A & 62, ..."). Heuristic: cut right before "Plot" or the
+// first digit (start of the plot/door number), whichever comes first.
+// Fragile if a location string is formatted differently — falls back to ""
+// rather than showing garbled text. Mirrors ManagerDashboard.jsx exactly.
+const extractOrgFromLocation = (location) => {
+  if (!location) return "";
+  const match = location.match(/^(.*?)(?:\s*,?\s*Plot\b|\s+\d)/i);
+  const org = match ? match[1] : "";
+  return org.replace(/[,\s]+$/, "").trim();
 };
 
 // Shared small message boxes used by the new panels below.
@@ -1091,6 +1151,20 @@ export default function AdminDashboard({ onLogout }) {
 
   const [plantFilter, setPlantFilter]   = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+
+ // Ribbon detail — shows the specifically-selected plant when one is picked
+  // via the "All plants" dropdown below; otherwise defaults to the first
+  // plant in the list, so the ribbon always shows Org · Code · Plant Name
+  // rather than a generic "Admin Dashboard" label.
+  const selectedPlantInfo = useMemo(() => {
+    if (plantFilter) {
+      return plants.find((p) => p._id === plantFilter) || null;
+    }
+    return plants[0] || null;
+  }, [plantFilter, plants]);
+
+  const selectedPlantOrgName = extractOrgFromLocation(selectedPlantInfo?.location);
+
   const [search, setSearch]             = useState("");
 
   const [selectedMonth, setSelectedMonth] = useState(() => getISTYearMonth(new Date()));
@@ -1104,6 +1178,18 @@ export default function AdminDashboard({ onLogout }) {
     });
   };
   const goToCurrentMonth = () => setSelectedMonth(getISTYearMonth(new Date()));
+
+  // Which date filter is active, and (for "custom") the set of individually-
+  // picked dates. Mirrors ManagerDashboard.jsx exactly.
+  const [dateFilterMode, setDateFilterMode] = useState("month"); // "today" | "week" | "month" | "custom"
+  const [customDates, setCustomDates] = useState([]); // ["YYYY-MM-DD", ...]
+  const [customDateInput, setCustomDateInput] = useState(todayLocalISOForFilter());
+
+  const addCustomDate = () => {
+    if (!customDateInput) return;
+    setCustomDates((prev) => (prev.includes(customDateInput) ? prev : [...prev, customDateInput].sort()));
+  };
+  const removeCustomDate = (d) => setCustomDates((prev) => prev.filter((x) => x !== d));
 
   const [activePanel, setActivePanel] = useState(null);
 
@@ -1183,11 +1269,14 @@ export default function AdminDashboard({ onLogout }) {
     }
   };
 
-  // Scoped by search + month only (NOT status) — feeds the stat cards, so
-  // their counts are always accurate for whichever month is selected,
-  // regardless of which status chip happens to be active.
-  const monthScopedVisitors = useMemo(() => {
+  // Scoped by search + the active date filter (NOT status) — feeds the stat
+  // cards. "month" branch matches the original month-navigator behavior;
+  // today/week/custom are additional filter modes. Mirrors
+  // ManagerDashboard.jsx's dateScopedVisitors exactly.
+  const dateScopedVisitors = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const todayISO = getISTDateISO(new Date());
+    const weekRange = dateFilterMode === "week" ? getISTWeekRange(new Date()) : null;
 
     return visitors.filter((v) => {
       const matchesSearch =
@@ -1197,19 +1286,48 @@ export default function AdminDashboard({ onLogout }) {
           .some((field) => field.toLowerCase().includes(q));
       if (!matchesSearch) return false;
 
-      const dateForMonth = getVisitDate(v) || getRequestedTime(v);
-      const ym = dateForMonth ? getISTYearMonth(dateForMonth) : null;
+      const dateVal = getVisitDate(v) || getRequestedTime(v);
+
+      if (dateFilterMode === "today") {
+        return dateVal ? getISTDateISO(dateVal) === todayISO : false;
+      }
+
+      if (dateFilterMode === "week") {
+        if (!dateVal) return false;
+        const iso = getISTDateISO(dateVal);
+        return iso >= weekRange.start && iso <= weekRange.end;
+      }
+
+      if (dateFilterMode === "custom") {
+        if (customDates.length === 0 || !dateVal) return false;
+        return customDates.includes(getISTDateISO(dateVal));
+      }
+
+      // "month" (default)
+      const ym = dateVal ? getISTYearMonth(dateVal) : null;
       if (!ym) return true; // no usable date — don't hide it, just can't bucket it
       return ym.year === selectedMonth.year && ym.month === selectedMonth.month;
     });
-  }, [visitors, search, selectedMonth]);
+  }, [visitors, search, selectedMonth, dateFilterMode, customDates]);
 
-  // Adds the status chip filter on top of the month/search scoping above —
+  // Adds the status chip filter on top of the date/search scoping above —
   // this is what the table and CSV export actually show.
   const filteredVisitors = useMemo(() => {
-    if (!statusFilter) return monthScopedVisitors;
-    return monthScopedVisitors.filter((v) => v.status === statusFilter);
-  }, [monthScopedVisitors, statusFilter]);
+    if (!statusFilter) return dateScopedVisitors;
+    return dateScopedVisitors.filter((v) => v.status === statusFilter);
+  }, [dateScopedVisitors, statusFilter]);
+
+  // Human-readable label for the empty-state text, CSV filename, and footer.
+  const dateFilterLabel = () => {
+    if (dateFilterMode === "today") return "Today";
+    if (dateFilterMode === "week") return "This Week";
+    if (dateFilterMode === "custom") {
+      return customDates.length
+        ? `${customDates.length} selected date${customDates.length === 1 ? "" : "s"}`
+        : "no dates selected";
+    }
+    return `${MONTH_NAMES[selectedMonth.month - 1]} ${selectedMonth.year}`;
+  };
 
   const handleLogout = () => {
     logoutAdmin();
@@ -1218,19 +1336,24 @@ export default function AdminDashboard({ onLogout }) {
   };
 
   const handleExportCsv = () => {
-    const headers = ["Name", "Phone", "Company", "Host", "Plant", "Purpose", "Visit Date", "Status", "Requested At", "Checked In", "Checked Out"];
+    const headers = ["Name", "Phone", "Company", "Host", "Plant", "Purpose", "Visit Date", "Status", "Requested At", "Created by", "Checked In", "Checked Out"];
     const rows = filteredVisitors.map((v) => [
       v.name, v.phone, v.company, v.host, v.plant?.plantName, v.purpose,
       fmtDate(getVisitDate(v)),
       STATUS_LABELS[v.status] || v.status,
-      fmtTime(getRequestedTime(v)), fmtTime(getCheckInTime(v)), fmtTime(getCheckOutTime(v)),
+      fmtTime(getRequestedTime(v)), getRegisteredBy(v), fmtTime(getCheckInTime(v)), fmtTime(getCheckOutTime(v)),
     ]);
     const csv = [headers, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `visitors_${selectedMonth.year}-${String(selectedMonth.month).padStart(2, "0")}.csv`;
+    const slug =
+      dateFilterMode === "today" ? "today" :
+      dateFilterMode === "week" ? "this-week" :
+      dateFilterMode === "custom" ? "custom-dates" :
+      `${selectedMonth.year}-${String(selectedMonth.month).padStart(2, "0")}`;
+    a.download = `visitors_${slug}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1246,7 +1369,17 @@ export default function AdminDashboard({ onLogout }) {
               SafeGuard <span className="text-purple-400">EHS</span>
             </span>
             <span className="hidden sm:inline text-slate-600 mx-2">/</span>
-            <span className="hidden sm:inline text-slate-400 text-sm">Admin Dashboard</span>
+            {selectedPlantInfo ? (
+              <span className="hidden sm:inline text-slate-400 text-sm">
+                {selectedPlantOrgName && <span className="text-slate-300">{selectedPlantOrgName}</span>}
+                {selectedPlantOrgName && <span className="text-slate-600 mx-1.5">·</span>}
+                <span className="text-purple-300 font-medium">{selectedPlantInfo.plantCode}</span>
+                <span className="text-slate-600 mx-1.5">·</span>
+                {selectedPlantInfo.plantName}
+              </span>
+            ) : (
+              <span className="hidden sm:inline text-slate-400 text-sm">Admin Dashboard</span>
+            )}
           </div>
           <div className="flex items-center gap-4">
             {admin?.username && (
@@ -1266,34 +1399,106 @@ export default function AdminDashboard({ onLogout }) {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
-        {/* Month navigator */}
+        {/* Date filter — Today / This Week / This Month / Custom Dates (multi-select) — mirrors ManagerDashboard.jsx */}
         {activePanel === null && (
-          <div className="flex items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => shiftMonth(-1)}
-                className="flex items-center justify-center w-9 h-9 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition"
-                aria-label="Previous month"
-              >
-                <ChevronLeftIcon />
-              </button>
-              <span className="text-white font-semibold text-sm min-w-[140px] text-center">
-                {MONTH_NAMES[selectedMonth.month - 1]} {selectedMonth.year}
-              </span>
-              <button
-                onClick={() => shiftMonth(1)}
-                className="flex items-center justify-center w-9 h-9 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition"
-                aria-label="Next month"
-              >
-                <ChevronRightIcon />
-              </button>
+          <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex gap-1 bg-slate-800 rounded-lg p-1 flex-wrap">
+                {[
+                  { key: "today",  label: "Today" },
+                  { key: "week",   label: "This Week" },
+                  { key: "month",  label: "This Month" },
+                  { key: "custom", label: "Custom Dates" },
+                ].map((f) => (
+                  <button
+                    key={f.key}
+                    onClick={() => setDateFilterMode(f.key)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition ${
+                      dateFilterMode === f.key ? "bg-purple-500 text-white shadow" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {dateFilterMode === "month" && (
+                <div className="flex items-center gap-2 sm:ml-auto">
+                  <button
+                    onClick={() => shiftMonth(-1)}
+                    className="flex items-center justify-center w-9 h-9 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition"
+                    aria-label="Previous month"
+                  >
+                    <ChevronLeftIcon />
+                  </button>
+                  <span className="text-white font-semibold text-sm min-w-[140px] text-center">
+                    {MONTH_NAMES[selectedMonth.month - 1]} {selectedMonth.year}
+                  </span>
+                  <button
+                    onClick={() => shiftMonth(1)}
+                    className="flex items-center justify-center w-9 h-9 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition"
+                    aria-label="Next month"
+                  >
+                    <ChevronRightIcon />
+                  </button>
+                  <button
+                    onClick={goToCurrentMonth}
+                    className="text-xs text-purple-300 hover:text-purple-200 bg-purple-500/10 hover:bg-purple-500/20 rounded-lg px-3 py-1.5 transition"
+                  >
+                    Current
+                  </button>
+                </div>
+              )}
             </div>
-            <button
-              onClick={goToCurrentMonth}
-              className="text-xs text-purple-300 hover:text-purple-200 bg-purple-500/10 hover:bg-purple-500/20 rounded-lg px-3 py-1.5 transition"
-            >
-              This Month
-            </button>
+
+            {/* Custom multi-date picker — add as many individual dates as you like */}
+            {dateFilterMode === "custom" && (
+              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800">
+                <input
+                  type="date"
+                  value={customDateInput}
+                  onChange={(e) => setCustomDateInput(e.target.value)}
+                  className="mt-3 bg-slate-800 border border-slate-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition [color-scheme:dark]"
+                />
+                <button
+                  onClick={addCustomDate}
+                  className="mt-3 flex items-center gap-1 bg-purple-500 hover:bg-purple-400 text-white text-xs font-semibold rounded-lg px-3 py-2 transition"
+                >
+                  <PlusIcon />
+                  Add Date
+                </button>
+
+                <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                  {customDates.length === 0 ? (
+                    <span className="text-xs text-slate-500">No dates selected yet — add one or more above.</span>
+                  ) : (
+                    <>
+                      {customDates.map((d) => (
+                        <span
+                          key={d}
+                          className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full pl-3 pr-1.5 py-1"
+                        >
+                          {fmtDateChip(d)}
+                          <button
+                            onClick={() => removeCustomDate(d)}
+                            className="w-4 h-4 flex items-center justify-center rounded-full hover:bg-slate-700 text-slate-400 hover:text-white transition"
+                            aria-label={`Remove ${d}`}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                      <button
+                        onClick={() => setCustomDates([])}
+                        className="text-xs text-slate-500 hover:text-white transition px-2"
+                      >
+                        Clear all
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1373,7 +1578,7 @@ export default function AdminDashboard({ onLogout }) {
                     statusFilter === status ? "border-purple-500 ring-1 ring-purple-500" : "border-slate-800 hover:border-slate-700"
                   }`}
                 >
-                  <p className="text-2xl font-bold text-white">{countForStatus(monthScopedVisitors, status)}</p>
+                  <p className="text-2xl font-bold text-white">{countForStatus(dateScopedVisitors, status)}</p>
                   <p className="text-xs text-slate-400 mt-1">{STATUS_LABELS[status]}</p>
                 </button>
               ))}
@@ -1436,7 +1641,7 @@ export default function AdminDashboard({ onLogout }) {
                 <p className="text-slate-500 text-sm text-center py-12">Loading visitors…</p>
               ) : filteredVisitors.length === 0 ? (
                 <p className="text-slate-500 text-sm text-center py-12">
-                  No visitors match this filter in {MONTH_NAMES[selectedMonth.month - 1]} {selectedMonth.year}.
+                  No visitors match this filter for {dateFilterLabel()}.
                 </p>
               ) : (
                 <div className="overflow-x-auto">
@@ -1449,6 +1654,7 @@ export default function AdminDashboard({ onLogout }) {
                         <th className="text-left font-medium px-5 py-3">Visit Date</th>
                         <th className="text-left font-medium px-5 py-3">Purpose</th>
                         <th className="text-left font-medium px-5 py-3">Requested</th>
+                        <th className="text-left font-medium px-5 py-3">Created by</th>
                         <th className="text-left font-medium px-5 py-3">Status</th>
                         <th className="text-left font-medium px-5 py-3">Checked In</th>
                         <th className="text-left font-medium px-5 py-3">Checked Out</th>
@@ -1472,6 +1678,7 @@ export default function AdminDashboard({ onLogout }) {
                             <td className="px-5 py-3.5 text-slate-300 whitespace-nowrap">{fmtDate(getVisitDate(v))}</td>
                             <td className="px-5 py-3.5 text-slate-300">{v.purpose || "—"}</td>
                             <td className="px-5 py-3.5 text-slate-400 text-xs whitespace-nowrap">{fmtTime(getRequestedTime(v))}</td>
+                            <td className="px-5 py-3.5 text-slate-300 text-xs whitespace-nowrap">{getRegisteredBy(v)}</td>
                             <td className="px-5 py-3.5">
                               <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${STATUS_STYLES[v.status] || "bg-slate-800 text-slate-400 border-slate-700"}`}>
                                 {STATUS_LABELS[v.status] || v.status}
@@ -1530,9 +1737,9 @@ export default function AdminDashboard({ onLogout }) {
             </div>
 
             <p className="text-xs text-slate-600">
-              Showing {filteredVisitors.length} of {visitors.length} visitor{visitors.length === 1 ? "" : "s"}
-              {plantFilter ? "" : " across all plants"} · {MONTH_NAMES[selectedMonth.month - 1]} {selectedMonth.year}.
-            </p>
+          Showing {filteredVisitors.length} of {visitors.length} visitor{visitors.length === 1 ? "" : "s"}
+          {plantFilter ? "" : " across all plants"} · {dateFilterLabel()}.
+        </p>
           </>
         )}
       </main>

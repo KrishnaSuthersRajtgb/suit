@@ -62,6 +62,18 @@ export const loginSecurity = (payload) =>
     body: JSON.stringify(payload),
   });
 
+// Single unified staff login — { username, password, plant } → { token, user }.
+// Backend looks the user up by username only (no role guessing) and returns
+// user.role so the caller knows which dashboard to route to. Used by the
+// single-form StaffLoginPage.jsx instead of trying loginAdmin/loginManager/
+// loginSecurity in sequence. loginAdmin/loginManager/loginSecurity above are
+// untouched and still work if anything else calls them directly.
+export const login = (payload) =>
+  request("/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
 // Clears the stored staff session. Call this from a dashboard's Logout
 // button, then navigate("/site").
 export const logoutAdmin = () => {

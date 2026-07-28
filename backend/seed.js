@@ -7,10 +7,12 @@ const Plant = require("./models/Plant");
 const User = require("./models/User");
 
 const PLANTS = [
-  { plantCode: "PLT-CHN01", plantName: "Chennai Plant 1", location: "Ambattur, Chennai" },
-  { plantCode: "PLT-CHN02", plantName: "Chennai Plant 2", location: "Sriperumbudur, Chennai" },
-  { plantCode: "PLT-PUN01", plantName: "Pune Plant", location: "Chakan, Pune" },
-  { plantCode: "PLT-BLR01", plantName: "Bangalore Plant", location: "Peenya, Bangalore" },
+  {
+    plantCode: "KKIN-JAI",
+    plantName: "Jaipur Plant",
+    location:
+      "Kerakoll India Pvt. Ltd. Plot No 02-01, 01A & 62, Domestic Tariff Area (DTA) - 02 Sub. PO - Mahindra World City Jaipur, Tehsil - Sanganer, Jaipur, Rajasthan Pincode - 302037, India, Asia (Organization: Kerakoll India Private Limited)",
+  },
 ];
 
 const run = async () => {
@@ -26,7 +28,7 @@ const run = async () => {
   }
   console.log(`Seeded ${plantDocs.length} plants.`);
 
-  const chennai1 = plantDocs.find((p) => p.plantCode === "PLT-CHN01");
+  const jaipurPlant = plantDocs.find((p) => p.plantCode === "KKIN-JAI");
 
   const testUsers = [
   { username: "admin1", password: "Admin@123", role: "ADMIN", fullName: "Test Admin" },
@@ -37,7 +39,18 @@ const run = async () => {
   for (const u of testUsers) {
     const existing = await User.findOne({ username: u.username });
     if (existing) {
-      console.log(`User "${u.username}" already exists, skipping.`);
+      // User already exists — but it may still be pointing at a plant that
+      // was since deleted (e.g. after re-seeding with a new plant list).
+      // Re-point it to the current plant rather than silently skipping,
+      // so login doesn't fail with "not registered for the selected plant".
+      if (String(existing.plant) !== String(jaipurPlant._id)) {
+        existing.plant = jaipurPlant._id;
+        existing.status = "ACTIVE";
+        await existing.save();
+        console.log(`Updated user "${u.username}" to plant ${jaipurPlant.plantCode}.`);
+      } else {
+        console.log(`User "${u.username}" already registered for ${jaipurPlant.plantCode}, skipping.`);
+      }
       continue;
     }
     const passwordHash = await User.hashPassword(u.password);
@@ -46,10 +59,10 @@ const run = async () => {
       passwordHash,
       role: u.role,
       fullName: u.fullName,
-      plant: chennai1._id,
+      plant: jaipurPlant._id,
       status: "ACTIVE",
     });
-    console.log(`Created user "${u.username}" / "${u.password}" (plant: ${chennai1.plantCode})`);
+    console.log(`Created user "${u.username}" / "${u.password}" (plant: ${jaipurPlant.plantCode})`);
   }
 
   await mongoose.connection.close();

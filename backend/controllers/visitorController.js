@@ -163,7 +163,10 @@ if (visitDate) {
       host,
       plant: plantDoc._id,
       visitDate: scheduledDate,
-      registeredBy: req.user?._id,
+      // req.user comes from the JWT payload (see authController.js
+      // signToken), which uses `id`, not `_id` — req.user?._id was always
+      // undefined, so registeredBy silently never got saved.
+      registeredBy: req.user?.id,
       status: "INVITED",
       invitedAt: new Date(),
       statusHistory: [{ status: "INVITED", at: new Date() }],
@@ -343,9 +346,11 @@ exports.listVisitors = async (req, res) => {
       query.visitDate = { $gte: today, $lt: tomorrow };
     }
 
-    const visitors = await Visitor.find(query)
-      .populate("plant", "plantName plantCode location")
-      .sort({ registeredAt: -1 });
+    // After
+const visitors = await Visitor.find(query)
+  .populate("plant", "plantName plantCode location")
+  .populate("registeredBy", "username fullName") // so ManagerDashboard/AdminDashboard can show a name instead of a raw ObjectId
+  .sort({ registeredAt: -1 });
 
     // Only worth sweeping when the caller can actually see stale records —
     // Security's default (today-only) query never returns anything old
