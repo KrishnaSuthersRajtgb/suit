@@ -435,7 +435,7 @@ export default function SafetyAssessment({ visitor, onPass }) {
         <div className="flex items-center gap-2.5">
           <span className="text-emerald-400"><ShieldIcon /></span>
           <span className="text-lg font-semibold text-white">
-            SafeGuard <span className="text-emerald-400">EHS</span>
+            EHS<span className="text-emerald-400">360</span>
           </span>
         </div>
         <span className="text-xs text-slate-500 font-medium tracking-widest uppercase">

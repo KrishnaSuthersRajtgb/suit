@@ -1366,7 +1366,7 @@ export default function AdminDashboard({ onLogout }) {
           <div className="flex items-center gap-2.5">
             <div className="text-purple-400"><ShieldIcon /></div>
             <span className="text-lg font-semibold text-white">
-              SafeGuard <span className="text-purple-400">EHS</span>
+              EHS<span className="text-purple-400">360</span>
             </span>
             <span className="hidden sm:inline text-slate-600 mx-2">/</span>
             {selectedPlantInfo ? (

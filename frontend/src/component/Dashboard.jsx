@@ -86,7 +86,7 @@ function Sidebar({ activePage, user, onLogout, onClose }) {
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4" />
             </svg>
           </span>
-          <span className="text-lg font-semibold text-white">SafeGuard <span className="text-emerald-400">EHS</span></span>
+          <span className="text-lg font-semibold text-white">EHS<span className="text-emerald-400">360</span></span>
         </div>
         {onClose && (
           <button onClick={onClose} className="text-slate-400 hover:text-white lg:hidden">

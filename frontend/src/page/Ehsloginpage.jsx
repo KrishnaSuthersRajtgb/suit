@@ -117,7 +117,7 @@ export default function EHSLoginPage({ onVisitorCheckin }) {
       <div className="hidden lg:flex lg:w-5/12 flex-col justify-between p-12 bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950 border-r border-slate-800">
         <div className="flex items-center gap-3">
           <ShieldIcon />
-          <span className="text-xl font-semibold text-white">SafeGuard <span className="text-emerald-400">EHS</span></span>
+          <span className="text-xl font-semibold text-white">EHS<span className="text-emerald-400">360</span></span>
         </div>
         <div>
           <span className="text-xs font-mono tracking-widest text-emerald-500 uppercase">
@@ -138,7 +138,7 @@ export default function EHSLoginPage({ onVisitorCheckin }) {
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 overflow-y-auto">
         <div className="flex lg:hidden items-center gap-2 mb-8">
           <div className="text-emerald-400"><ShieldIcon /></div>
-          <span className="text-lg font-semibold text-white">SafeGuard <span className="text-emerald-400">EHS</span></span>
+          <span className="text-lg font-semibold text-white">EHS<span className="text-emerald-400">360</span></span>
         </div>
 
         <div className="w-full max-w-md">

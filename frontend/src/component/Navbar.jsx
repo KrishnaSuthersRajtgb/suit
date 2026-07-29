@@ -66,8 +66,7 @@ export default function Navbar({
             <div className="flex items-center gap-2.5 text-emerald-400">
               <ShieldIcon />
               <div className="hidden sm:block">
-                <span className="text-white font-semibold text-base">SafeGuard</span>
-                <span className="text-emerald-400 font-semibold text-base"> EHS</span>
+                <span className="text-white font-semibold text-base">EHS<span className="text-emerald-400">360</span></span>
               </div>
             </div>
 

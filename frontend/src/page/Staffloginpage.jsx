@@ -132,7 +132,7 @@ export default function StaffLoginPage({ onStaffLoginSuccess }) {
       <div className="hidden lg:flex lg:w-5/12 flex-col justify-between p-12 bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950 border-r border-slate-800">
         <div className="flex items-center gap-3">
           <ShieldIcon />
-          <span className="text-xl font-semibold text-white">SafeGuard <span className="text-emerald-400">EHS</span></span>
+          <span className="text-xl font-semibold text-white">EHS<span className="text-emerald-400">360</span></span>
         </div>
         <div>
           <span className="text-xs font-mono tracking-widest text-emerald-500 uppercase">
@@ -144,7 +144,7 @@ export default function StaffLoginPage({ onStaffLoginSuccess }) {
             <span className="text-emerald-400">Keep it safe.</span>
           </h1>
           <p className="text-slate-400 text-base leading-relaxed max-w-sm">
-            Staff sign-in for SafeGuard EHS. Not for visitor check-in.
+            Staff sign-in for EHS 360. Not for visitor check-in.
           </p>
         </div>
       </div>
@@ -153,7 +153,7 @@ export default function StaffLoginPage({ onStaffLoginSuccess }) {
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 overflow-y-auto">
         <div className="flex lg:hidden items-center gap-2 mb-8">
           <div className="text-emerald-400"><ShieldIcon /></div>
-          <span className="text-lg font-semibold text-white">SafeGuard <span className="text-emerald-400">EHS</span></span>
+          <span className="text-lg font-semibold text-white">EHS<span className="text-emerald-400">360</span></span>
         </div>
 
         <div className="w-full max-w-md">

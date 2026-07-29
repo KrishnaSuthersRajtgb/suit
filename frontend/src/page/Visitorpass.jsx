@@ -90,7 +90,7 @@ export default function VisitorPass({ visitor }) {
         <div className="flex items-center gap-2.5 text-emerald-400">
           <ShieldIcon />
           <span className="text-lg font-semibold text-white">
-            SafeGuard <span className="text-emerald-400">EHS</span>
+            EHS<span className="text-emerald-400">360</span>
           </span>
         </div>
         <button
@@ -132,7 +132,7 @@ export default function VisitorPass({ visitor }) {
                 <div className="flex items-center gap-2 text-white print:text-slate-900">
                   <ShieldIcon />
                   <div>
-                    <p className="font-bold text-sm leading-tight">SafeGuard EHS</p>
+                    <p className="font-bold text-sm leading-tight">EHS 360</p>
                     <p className="text-xs opacity-80 leading-tight">Site Visitor Pass</p>
                   </div>
                 </div>

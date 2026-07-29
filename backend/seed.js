@@ -32,6 +32,8 @@ const run = async () => {
 
   const testUsers = [
   { username: "admin1", password: "Admin@123", role: "ADMIN", fullName: "Test Admin" },
+  { username: "Operations", password: "Kerakoll@99", role: "ADMIN", fullName: "Arindam Nag" },
+  { username: "HSE", password: "Kerakoll@99", role: "ADMIN", fullName: "Vaibhav Mandre" },
   { username: "manager1", password: "Manager@123", role: "MANAGER", fullName: "Test Manager" },
   { username: "security1", password: "Security@123", role: "SECURITY", fullName: "Test Security Guard" },
 ];

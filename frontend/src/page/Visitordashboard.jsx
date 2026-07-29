@@ -248,7 +248,7 @@ const plantId = v?.plant?._id || v?.plant;
         <div className="flex items-center gap-2.5 text-emerald-400">
           <ShieldIcon />
           <span className="text-lg font-semibold text-white">
-            SafeGuard <span className="text-emerald-400">EHS</span>
+            EHS<span className="text-emerald-400">360</span>
           </span>
           {plantInfo && (
             <>
