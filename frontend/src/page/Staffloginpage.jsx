@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { getPlants, login } from "../services/api";
 
 const BASKERVILLE = "'Baskerville', 'Baskerville Old Face', Georgia, serif";
-const MONTSERRAT = "'Montserrat', sans-serif";
 const MOSS_GREEN = "#8A9A5B";
 const MOSS_GREEN_DARK = "#78875030";
 
@@ -128,15 +127,16 @@ export default function StaffLoginPage({ onStaffLoginSuccess }) {
     <div className="min-h-screen bg-white flex">
       {/* Left branding panel */}
       <div className="hidden lg:flex lg:w-5/12 flex-col p-12 bg-white border-r border-slate-200">
-        
         <div className="flex items-center gap-3 mb-6">
-          {/* <span className="text-4xl font-bold text-slate-800 tracking-tight">EHS 360</span> */}
-          <span
-            className="text-4xl text-slate-800 tracking-tight"
-            style={{ fontFamily: MONTSERRAT, fontWeight: 800 }}
-          >
-            kerakoll
-          </span>
+          <span className="text-4xl font-bold text-slate-800 tracking-tight">EHS 360</span>
+          {/* <span className="text-4xl font-bold text-slate-800 tracking-tight">kerakoll</span> */}
+        </div>
+        <div className="flex items-center gap-3 mb-6">
+          <img
+            src="/logo.png"
+            alt="Kerakoll"
+            className="h-12 w-auto object-contain"
+          />
         </div>
         <h1
           className="text-5xl font-bold mb-10"
@@ -177,7 +177,11 @@ export default function StaffLoginPage({ onStaffLoginSuccess }) {
       {/* Right form panel */}
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 overflow-y-auto bg-[#A6A6A6]">
         <div className="flex lg:hidden items-center gap-2 mb-8">
-          <span className="text-2xl font-bold text-white tracking-tight">kerakoll</span>
+          <img
+            src="/logo.png"
+            alt="Kerakoll"
+            className="h-10 w-auto object-contain"
+          />
         </div>
 
         <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
