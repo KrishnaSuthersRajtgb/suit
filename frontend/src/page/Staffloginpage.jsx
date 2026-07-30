@@ -153,7 +153,7 @@ export default function StaffLoginPage({ onStaffLoginSuccess }) {
 
         <div className="mt-auto flex items-center gap-4">
           <img
-            src="/image.png"
+            src="/ehs.png"
             alt="EHS 360"
             className="w-16 h-16 rounded-xl object-contain shrink-0"
           />
