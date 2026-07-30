@@ -148,7 +148,7 @@ export default function StaffLoginPage({ onStaffLoginSuccess }) {
           className="text-3xl text-slate-600"
           style={{ fontFamily: BASKERVILLE }}
         >
-          EHS Suit
+          EHS Suite
         </h2>
 
         <div className="mt-auto flex items-center gap-4">
