@@ -2,12 +2,9 @@ import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { checkinVisitor } from "../services/api";
 
-const ShieldIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" className="w-8 h-8" stroke="currentColor" strokeWidth={1.8}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M12 2L4 6v6c0 5.25 3.5 9.74 8 11 4.5-1.26 8-5.75 8-11V6l-8-4z" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4" />
-  </svg>
-);
+const BASKERVILLE = "'Baskerville', 'Baskerville Old Face', Georgia, serif";
+const MONTSERRAT = "'Montserrat', sans-serif";
+const MOSS_GREEN = "#8A9A5B";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ── Visitor Form ──────────────────────────────────────────────────────────────
@@ -63,15 +60,15 @@ const handleSubmit = async (e) => {
   return (
     <form onSubmit={handleSubmit} className="space-y-4" noValidate>
       <div>
-        <label className="block text-sm font-medium text-slate-300 mb-1.5">
-          Phone Number <span className="text-red-400">*</span>
+        <label className="block text-sm font-medium text-slate-700 mb-1.5">
+          Phone Number <span className="text-red-500">*</span>
         </label>
         <input
           type="tel"
           placeholder="+91 98765 43210"
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+          className="w-full bg-white border border-slate-300 text-slate-800 placeholder-slate-400 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#8A9A5B] focus:border-transparent transition"
         />
         <p className="text-xs text-slate-500 mt-2">
           Enter the phone number your visit was approved under.
@@ -79,7 +76,7 @@ const handleSubmit = async (e) => {
       </div>
 
       {error && (
-        <div className="flex items-start gap-2.5 bg-red-950/60 border border-red-800 text-red-300 text-sm rounded-lg px-4 py-3">
+        <div className="flex items-start gap-2.5 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-3">
           <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 mt-0.5 shrink-0">
             <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zm-1 9a1 1 0 01-1-1v-4a1 1 0 112 0v4a1 1 0 01-1 1z" clipRule="evenodd" />
           </svg>
@@ -90,7 +87,10 @@ const handleSubmit = async (e) => {
       <button
         type="submit"
         disabled={loading}
-        className="w-full bg-blue-500 hover:bg-blue-400 disabled:bg-blue-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-3 text-sm transition flex items-center justify-center gap-2"
+        className="w-full text-white font-semibold rounded-full py-3 text-sm transition flex items-center justify-center gap-2 disabled:cursor-not-allowed"
+        style={{ backgroundColor: loading ? "#a9b587" : MOSS_GREEN }}
+        onMouseEnter={(e) => { if (!loading) e.currentTarget.style.backgroundColor = "#78874f"; }}
+        onMouseLeave={(e) => { if (!loading) e.currentTarget.style.backgroundColor = MOSS_GREEN; }}
       >
         {loading ? (
           <>
@@ -112,49 +112,67 @@ const handleSubmit = async (e) => {
 // ────────────────────────────────────────────────────────────────────────────
 export default function EHSLoginPage({ onVisitorCheckin }) {
   return (
-    <div className="min-h-screen bg-slate-950 flex">
+    <div className="min-h-screen bg-white flex">
       {/* Left branding panel */}
-      <div className="hidden lg:flex lg:w-5/12 flex-col justify-between p-12 bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950 border-r border-slate-800">
-        <div className="flex items-center gap-3">
-          <ShieldIcon />
-          <span className="text-xl font-semibold text-white">EHS<span className="text-emerald-400">360</span></span>
-        </div>
-        <div>
-          <span className="text-xs font-mono tracking-widest text-emerald-500 uppercase">
-            Environment · Health · Safety
+      <div className="hidden lg:flex lg:w-5/12 flex-col p-12 bg-white border-r border-slate-200">
+        <div className="flex items-center gap-3 mb-6">
+          <span
+            className="text-4xl text-slate-800 tracking-tight"
+            style={{ fontFamily: MONTSERRAT, fontWeight: 800 }}
+          >
+            kerakoll
           </span>
-          <h1 className="text-4xl font-bold text-white leading-tight mt-4 mb-4">
-            Every worker home safe.
-            <br />
-            <span className="text-emerald-400">Every day.</span>
-          </h1>
-          <p className="text-slate-400 text-base leading-relaxed max-w-sm">
-            Manage incident reports, safety checklists, compliance tracking, and hazard logs — all in one place.
-          </p>
+        </div>
+        <h1
+          className="text-5xl font-bold mb-10"
+          style={{ color: MOSS_GREEN, fontFamily: BASKERVILLE }}
+        >
+          HSE
+        </h1>
+        <h2
+          className="text-3xl text-slate-600"
+          style={{ fontFamily: BASKERVILLE }}
+        >
+          Visitor Safety Induction
+        </h2>
+
+        <div className="mt-auto flex items-center gap-4">
+          <img
+            src="/image.png"
+            alt="EHS 360"
+            className="w-16 h-16 rounded-xl object-contain shrink-0"
+          />
+          <div>
+            <p
+              className="text-2xl font-semibold mb-1"
+              style={{ color: MOSS_GREEN, fontFamily: BASKERVILLE }}
+            >
+              Health . Safety . Environment
+            </p>
+            <p
+              className="text-lg font-semibold text-slate-700"
+              style={{ fontFamily: BASKERVILLE }}
+            >
+              Building a safer environment together
+            </p>
+          </div>
         </div>
       </div>
 
       {/* Right form panel */}
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 overflow-y-auto">
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 overflow-y-auto bg-[#A6A6A6]">
         <div className="flex lg:hidden items-center gap-2 mb-8">
-          <div className="text-emerald-400"><ShieldIcon /></div>
-          <span className="text-lg font-semibold text-white">EHS<span className="text-emerald-400">360</span></span>
+          <span className="text-2xl font-bold text-white tracking-tight">kerakoll</span>
         </div>
 
-        <div className="w-full max-w-md">
+        <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
           <div className="mb-6">
-            <h2 className="text-2xl font-bold text-white">Kerakoll India Private Limited</h2>
-            <h2 className="text-2xl font-bold text-white">Welcome</h2>
-            <p className="text-slate-400 text-sm mt-1">Enter your phone number to check in for your visit.</p>
+            {/* <h2 className="text-2xl font-bold text-slate-800">Kerakoll India Private Limited</h2> */}
+            <h2 className="text-2xl font-bold text-slate-800">Welcome</h2>
+            <p className="text-slate-500 text-sm mt-1">Enter your phone number to check in for your visit.</p>
           </div>
 
           <VisitorForm onVisitorCheckin={onVisitorCheckin} />
-
-          <p className="text-center text-xs text-slate-600 mt-6">
-            Having trouble? Contact{" "}
-            <span className="text-slate-400 hover:text-emerald-400 cursor-pointer transition">IT Support</span>{" "}
-            or your site administrator.
-          </p>
 
           {/* Deliberately no visible Security/Admin/Manager tabs here.
               Staff go to /site directly (bookmark, kiosk shortcut, etc). */}
