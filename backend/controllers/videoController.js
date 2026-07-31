@@ -30,8 +30,9 @@ const createVideo = asyncHandler(async (req, res) => {
   let { url } = req.body;
 
   if (req.file) {
-    // Served statically from server.js's express.static("/uploads", ...).
-    url = `/uploads/videos/${req.file.filename}`;
+    // multer-storage-cloudinary already uploaded the file and put its
+    // hosted URL on req.file.path — no local /uploads path needed anymore.
+    url = req.file.path;
   }
 
   if (!url || !url.trim()) {

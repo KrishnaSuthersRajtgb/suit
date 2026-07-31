@@ -1,17 +1,21 @@
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const cloudinary = require("../config/cloudinary");
 
-// Videos are stored locally under backend/uploads/videos and served
-// statically (see server.js) at /uploads/videos/<filename>.
-const UPLOAD_DIR = path.join(__dirname, "..", "uploads", "videos");
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${unique}${path.extname(file.originalname)}`);
+// Videos are uploaded straight to Cloudinary (folder: "ehs-suite/videos")
+// instead of local disk — this makes uploads work identically on localhost
+// and on the deployed backend, and survives server restarts/redeploys.
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: "ehs-suite/videos",
+    resource_type: "video",
+    // Keep the original filename (minus extension) + a timestamp so files
+    // don't collide, similar to the old local-disk naming scheme.
+    public_id: (req, file) => {
+      const base = file.originalname.replace(/\.[^/.]+$/, "");
+      return `${Date.now()}-${base}`;
+    },
   },
 });
 
